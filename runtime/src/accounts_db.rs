@@ -4745,7 +4745,6 @@ impl AccountsDb {
     where
         F: FnMut(Option<(&Pubkey, AccountSharedData, Slot)>),
     {
-        panic!("plz stahp");
         // This can error out if the slots being scanned over are aborted
         self.accounts_index.scan_accounts(
             ancestors,

@@ -1042,6 +1042,7 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {
         F: FnMut(&Pubkey, (&T, Slot)),
         R: RangeBounds<Pubkey> + std::fmt::Debug,
     {
+        panic!("plz stahp");
         // TODO: expand to use mint index to find the `pubkey_list` below more efficiently
         // instead of scanning the entire range
         let mut total_elapsed_timer = Measure::start("total");
