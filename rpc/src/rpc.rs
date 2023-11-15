@@ -1889,6 +1889,12 @@ impl JsonRpcRequestProcessor {
         token_account_filter: TokenAccountsFilter,
         config: Option<RpcAccountInfoConfig>,
     ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
+        info!(
+            "get_token_accounts_by_owner rpc request received: {:?}\n token_account_filter\n{:?}\n config\n{:?}",
+            owner,
+            token_account_filter,
+            config
+        );
         return Err(Error::invalid_request());
         let RpcAccountInfoConfig {
             encoding,

@@ -270,7 +270,7 @@ pub enum RpcError {
     ForUser(String), /* "direct-to-user message" */
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum TokenAccountsFilter {
     Mint(Pubkey),
     ProgramId(Pubkey),
