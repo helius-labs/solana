@@ -794,8 +794,6 @@ impl<T: IndexValue, U: DiskIndexValue + From<T> + Into<T>> AccountsIndex<T, U> {
         F: FnMut(&Pubkey, (&T, Slot)),
         R: RangeBounds<Pubkey> + std::fmt::Debug,
     {
-        let backtrace = std::backtrace::Backtrace::force_capture();
-        error!("HELIUS: do_checked_scan_accounts() backtrace:\n{backtrace}");
         {
             let locked_removed_bank_ids = self.removed_bank_ids.lock().unwrap();
             if locked_removed_bank_ids.contains(&scan_bank_id) {
