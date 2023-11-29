@@ -155,6 +155,12 @@ pub enum AccountAddressFilter {
     Include, // only include addresses matching the filter
 }
 
+struct CollectedAccountsData<'a> {
+    pub accounts_to_store: Vec<(&'a Pubkey, &'a AccountSharedData)>,
+    pub transactions: Vec<Option<&'a SanitizedTransaction>>,
+    pub preexecution_account_datas: Option<Vec<Option<&'a AccountSharedData>>>,
+}
+
 impl Accounts {
     pub fn default_for_tests() -> Self {
         Self::new_empty(AccountsDb::default_for_tests())
@@ -1303,22 +1309,27 @@ impl Accounts {
         txs: &[SanitizedTransaction],
         res: &[TransactionExecutionResult],
         loaded: &mut [TransactionLoadResult],
-        rent_collector: &RentCollector,
         durable_nonce: &DurableNonce,
         lamports_per_signature: u64,
         include_slot_in_hash: IncludeSlotInHash,
+        preexection_account_data: Option<HashMap<Pubkey, AccountSharedData>>,
     ) {
-        let (accounts_to_store, transactions) = self.collect_accounts_to_store(
+        let CollectedAccountsData {
+            accounts_to_store,
+            transactions,
+            preexecution_account_datas,
+        } = self.collect_accounts_to_store(
             txs,
             res,
             loaded,
-            rent_collector,
             durable_nonce,
             lamports_per_signature,
+            preexection_account_data.as_ref(),
         );
         self.accounts_db.store_cached_inline_update_index(
             (slot, &accounts_to_store[..], include_slot_in_hash),
             Some(&transactions),
+            preexecution_account_datas,
         );
     }
 
@@ -1326,7 +1337,7 @@ impl Accounts {
         &self,
         accounts: impl StorableAccounts<'a, T>,
     ) {
-        self.accounts_db.store_cached(accounts, None)
+        self.accounts_db.store_cached(accounts, None, None)
     }
 
     /// Add a slot to root.  Root slots cannot be purged
@@ -1340,15 +1351,25 @@ impl Accounts {
         txs: &'a [SanitizedTransaction],
         execution_results: &'a [TransactionExecutionResult],
         load_results: &'a mut [TransactionLoadResult],
-        _rent_collector: &RentCollector,
         durable_nonce: &DurableNonce,
         lamports_per_signature: u64,
-    ) -> (
-        Vec<(&'a Pubkey, &'a AccountSharedData)>,
-        Vec<Option<&'a SanitizedTransaction>>,
-    ) {
+        preexecution_account_map: Option<&'a HashMap<Pubkey, AccountSharedData>>,
+    ) -> CollectedAccountsData<'a> {
         let mut accounts = Vec::with_capacity(load_results.len());
         let mut transactions = Vec::with_capacity(load_results.len());
+        // to track the accounts as they change when transactions are executed
+        let collect_preexecution_account_data = preexecution_account_map.is_some();
+
+        let mut preexecution_account_datas = if collect_preexecution_account_data {
+            Vec::with_capacity(load_results.len())
+        } else {
+            // preexeution account data not required
+            vec![]
+        };
+        let mut preexecution_account_map: HashMap<Pubkey, &AccountSharedData> =
+            preexecution_account_map
+                .map(|map| map.iter().map(|(key, acc)| (*key, acc)).collect())
+                .unwrap_or_default();
         for (i, ((tx_load_result, nonce), tx)) in load_results.iter_mut().zip(txs).enumerate() {
             if tx_load_result.is_err() {
                 // Don't store any accounts if tx failed to load
@@ -1399,11 +1420,35 @@ impl Accounts {
                         // Add to the accounts to store
                         accounts.push((&*address, &*account));
                         transactions.push(Some(tx));
+                        // get and update old account state
+                        if collect_preexecution_account_data {
+                            match preexecution_account_map.get_mut(address) {
+                                Some(value) => {
+                                    preexecution_account_datas.push(Some(*value));
+                                    *value = &*account;
+                                }
+                                None => {
+                                    preexecution_account_datas.push(None);
+                                    preexecution_account_map.insert(*address, &*account);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
-        (accounts, transactions)
+        let preexecution_account_datas =
+            collect_preexecution_account_data.then_some(preexecution_account_datas);
+        CollectedAccountsData {
+            accounts_to_store: accounts,
+            transactions,
+            preexecution_account_datas,
+        }
+    }
+
+    pub fn enable_preexecution_account_states_notification(&self) -> bool {
+        self.accounts_db
+            .enable_preexecution_account_states_notification()
     }
 }
 
@@ -3212,13 +3257,13 @@ mod tests {
         let keypair0 = Keypair::new();
         let keypair1 = Keypair::new();
         let pubkey = solana_sdk::pubkey::new_rand();
+        let preexec_account = AccountSharedData::new(0, 0, &Pubkey::default());
         let account0 = AccountSharedData::new(1, 0, &Pubkey::default());
         let account1 = AccountSharedData::new(2, 0, &Pubkey::default());
         let account2 = AccountSharedData::new(3, 0, &Pubkey::default());
 
-        let rent_collector = RentCollector::default();
-
         let instructions = vec![CompiledInstruction::new(2, &(), vec![0, 1])];
+        let mut pre_execution_account_map = HashMap::<Pubkey, AccountSharedData>::new();
         let message = Message::new_with_compiled_instructions(
             1,
             0,
@@ -3227,6 +3272,9 @@ mod tests {
             Hash::default(),
             instructions,
         );
+
+        pre_execution_account_map.insert(message.account_keys[0], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[1], preexec_account.clone());
         let transaction_accounts0 = vec![
             (message.account_keys[0], account0),
             (message.account_keys[1], account2.clone()),
@@ -3242,6 +3290,9 @@ mod tests {
             Hash::default(),
             instructions,
         );
+
+        pre_execution_account_map.insert(message.account_keys[0], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[1], preexec_account.clone());
         let transaction_accounts1 = vec![
             (message.account_keys[0], account1),
             (message.account_keys[1], account2),
@@ -3285,25 +3336,34 @@ mod tests {
         }
         let txs = vec![tx0.clone(), tx1.clone()];
         let execution_results = vec![new_execution_result(Ok(()), None); 2];
-        let (collected_accounts, transactions) = accounts.collect_accounts_to_store(
+        let CollectedAccountsData {
+            accounts_to_store,
+            transactions,
+            preexecution_account_datas,
+        } = accounts.collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),
-            &rent_collector,
             &DurableNonce::default(),
             0,
+            Some(&pre_execution_account_map),
         );
-        assert_eq!(collected_accounts.len(), 2);
-        assert!(collected_accounts
+        assert_eq!(accounts_to_store.len(), 2);
+        assert!(accounts_to_store
             .iter()
             .any(|(pubkey, _account)| *pubkey == &keypair0.pubkey()));
-        assert!(collected_accounts
+        assert!(accounts_to_store
             .iter()
             .any(|(pubkey, _account)| *pubkey == &keypair1.pubkey()));
 
         assert_eq!(transactions.len(), 2);
         assert!(transactions.iter().any(|txn| txn.unwrap().eq(&tx0)));
         assert!(transactions.iter().any(|txn| txn.unwrap().eq(&tx1)));
+        assert!(preexecution_account_datas.is_some());
+        let preexecution_account_datas = preexecution_account_datas.unwrap();
+        assert_eq!(preexecution_account_datas.len(), 2);
+        assert_eq!(preexecution_account_datas[0], Some(&preexec_account));
+        assert_eq!(preexecution_account_datas[1], Some(&preexec_account));
 
         // Ensure readonly_lock reflects lock
         assert_eq!(
@@ -3685,8 +3745,6 @@ mod tests {
 
     #[test]
     fn test_nonced_failure_accounts_rollback_from_pays() {
-        let rent_collector = RentCollector::default();
-
         let nonce_address = Pubkey::new_unique();
         let nonce_authority = keypair_from_seed(&[0; 32]).unwrap();
         let from = keypair_from_seed(&[1; 32]).unwrap();
@@ -3700,6 +3758,7 @@ mod tests {
         )));
         let nonce_account_post =
             AccountSharedData::new_data(43, &nonce_state, &system_program::id()).unwrap();
+        let preexec_account = AccountSharedData::new(1000, 0, &Pubkey::default());
         let from_account_post = AccountSharedData::new(4199, 0, &Pubkey::default());
         let to_account = AccountSharedData::new(2, 0, &Pubkey::default());
         let nonce_authority_account = AccountSharedData::new(3, 0, &Pubkey::default());
@@ -3718,6 +3777,14 @@ mod tests {
             (message.account_keys[3], to_account),
             (message.account_keys[4], recent_blockhashes_sysvar_account),
         ];
+
+        let mut pre_execution_account_map = HashMap::<Pubkey, AccountSharedData>::new();
+        pre_execution_account_map.insert(message.account_keys[0], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[1], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[2], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[3], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[4], preexec_account.clone());
+
         let tx = new_sanitized_tx(&[&nonce_authority, &from], message, blockhash);
 
         let durable_nonce = DurableNonce::from_blockhash(&Hash::new_unique());
@@ -3763,17 +3830,21 @@ mod tests {
             )),
             nonce.as_ref(),
         )];
-        let (collected_accounts, _) = accounts.collect_accounts_to_store(
+        let CollectedAccountsData {
+            accounts_to_store,
+            preexecution_account_datas,
+            ..
+        } = accounts.collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),
-            &rent_collector,
             &durable_nonce,
             0,
+            Some(&pre_execution_account_map),
         );
-        assert_eq!(collected_accounts.len(), 2);
+        assert_eq!(accounts_to_store.len(), 2);
         assert_eq!(
-            collected_accounts
+            accounts_to_store
                 .iter()
                 .find(|(pubkey, _account)| *pubkey == &from_address)
                 .map(|(_pubkey, account)| *account)
@@ -3781,7 +3852,7 @@ mod tests {
                 .unwrap(),
             from_account_pre,
         );
-        let collected_nonce_account = collected_accounts
+        let collected_nonce_account = accounts_to_store
             .iter()
             .find(|(pubkey, _account)| *pubkey == &nonce_address)
             .map(|(_pubkey, account)| *account)
@@ -3791,6 +3862,11 @@ mod tests {
             collected_nonce_account.lamports(),
             nonce_account_pre.lamports(),
         );
+        assert!(preexecution_account_datas.is_some());
+        let preexecution_account_datas = preexecution_account_datas.unwrap();
+        assert_eq!(preexecution_account_datas.len(), 2);
+        assert_eq!(preexecution_account_datas[0], Some(&preexec_account));
+        assert_eq!(preexecution_account_datas[1], Some(&preexec_account));
         assert_matches!(
             nonce_account::verify_nonce_account(&collected_nonce_account, durable_nonce.as_hash()),
             Some(_)
@@ -3799,8 +3875,6 @@ mod tests {
 
     #[test]
     fn test_nonced_failure_accounts_rollback_nonce_pays() {
-        let rent_collector = RentCollector::default();
-
         let nonce_authority = keypair_from_seed(&[0; 32]).unwrap();
         let nonce_address = nonce_authority.pubkey();
         let from = keypair_from_seed(&[1; 32]).unwrap();
@@ -3818,6 +3892,7 @@ mod tests {
         let to_account = AccountSharedData::new(2, 0, &Pubkey::default());
         let nonce_authority_account = AccountSharedData::new(3, 0, &Pubkey::default());
         let recent_blockhashes_sysvar_account = AccountSharedData::new(4, 0, &Pubkey::default());
+        let preexec_account = AccountSharedData::new(100, 0, &Pubkey::default());
 
         let instructions = vec![
             system_instruction::advance_nonce_account(&nonce_address, &nonce_authority.pubkey()),
@@ -3832,6 +3907,13 @@ mod tests {
             (message.account_keys[3], to_account),
             (message.account_keys[4], recent_blockhashes_sysvar_account),
         ];
+        let mut pre_execution_account_map = HashMap::<Pubkey, AccountSharedData>::new();
+        pre_execution_account_map.insert(message.account_keys[0], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[1], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[2], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[3], preexec_account.clone());
+        pre_execution_account_map.insert(message.account_keys[4], preexec_account.clone());
+
         let tx = new_sanitized_tx(&[&nonce_authority, &from], message, blockhash);
 
         let durable_nonce = DurableNonce::from_blockhash(&Hash::new_unique());
@@ -3876,16 +3958,20 @@ mod tests {
             )),
             nonce.as_ref(),
         )];
-        let (collected_accounts, _) = accounts.collect_accounts_to_store(
+        let CollectedAccountsData {
+            accounts_to_store,
+            preexecution_account_datas,
+            ..
+        } = accounts.collect_accounts_to_store(
             &txs,
             &execution_results,
             loaded.as_mut_slice(),
-            &rent_collector,
             &durable_nonce,
             0,
+            Some(&pre_execution_account_map),
         );
-        assert_eq!(collected_accounts.len(), 1);
-        let collected_nonce_account = collected_accounts
+        assert_eq!(accounts_to_store.len(), 1);
+        let collected_nonce_account = accounts_to_store
             .iter()
             .find(|(pubkey, _account)| *pubkey == &nonce_address)
             .map(|(_pubkey, account)| *account)
@@ -3895,6 +3981,10 @@ mod tests {
             collected_nonce_account.lamports(),
             nonce_account_pre.lamports()
         );
+        assert!(preexecution_account_datas.is_some());
+        let preexecution_account_datas = preexecution_account_datas.unwrap();
+        assert_eq!(preexecution_account_datas.len(), 1);
+        assert_eq!(preexecution_account_datas[0], Some(&preexec_account));
         assert_matches!(
             nonce_account::verify_nonce_account(&collected_nonce_account, durable_nonce.as_hash()),
             Some(_)

@@ -63,7 +63,6 @@ impl GeyserPluginManager {
         }
         false
     }
-
     /// Admin RPC request handler
     pub(crate) fn list_plugins(&self) -> JsonRpcResult<Vec<String>> {
         Ok(self.plugins.iter().map(|p| p.name().to_owned()).collect())
@@ -200,6 +199,12 @@ impl GeyserPluginManager {
         let mut current_plugin = self.plugins.remove(idx);
         let _current_lib = self.libs.remove(idx);
         current_plugin.on_unload();
+    }
+
+    pub fn enable_preexecution_account_states_notification(&self) -> bool {
+        self.plugins
+            .iter()
+            .any(|plugin| plugin.enable_pre_trasaction_execution_accounts_data())
     }
 }
 
