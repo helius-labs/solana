@@ -1422,16 +1422,8 @@ impl Accounts {
                         transactions.push(Some(tx));
                         // get and update old account state
                         if collect_preexecution_account_data {
-                            match preexecution_account_map.get_mut(address) {
-                                Some(value) => {
-                                    preexecution_account_datas.push(Some(*value));
-                                    *value = &*account;
-                                }
-                                None => {
-                                    preexecution_account_datas.push(None);
-                                    preexecution_account_map.insert(*address, &*account);
-                                }
-                            }
+                            let prev_acc = preexecution_account_map.insert(*address, &*account);
+                            preexecution_account_datas.push(prev_acc);
                         }
                     }
                 }
