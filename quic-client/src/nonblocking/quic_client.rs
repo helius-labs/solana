@@ -33,6 +33,7 @@ use {
         net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
         sync::{atomic::Ordering, Arc},
         thread,
+        time::Instant,
     },
     thiserror::Error,
     tokio::{sync::OnceCell, time::timeout},
@@ -294,15 +295,24 @@ impl QuicClient {
         let mut last_connection_id = 0;
         let mut last_error = None;
         while connection_try_count < 2 {
+            let start = Instant::now();
             let connection = {
                 let mut conn_guard = self.connection.lock().await;
-
+                info!(
+                    "Connection_cache_lock took {} ms",
+                    start.elapsed().as_millis()
+                );
                 let maybe_conn = conn_guard.as_mut();
                 match maybe_conn {
                     Some(conn) => {
                         if conn.connection.stable_id() == last_connection_id {
                             // this is the problematic connection we had used before, create a new one
+                            let start = Instant::now();
                             let conn = conn.make_connection_0rtt(self.addr, stats).await;
+                            info!(
+                                "0rtt_connection_creation took {} ms",
+                                start.elapsed().as_millis()
+                            );
                             match conn {
                                 Ok(conn) => {
                                     info!(
