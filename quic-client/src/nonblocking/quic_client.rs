@@ -177,6 +177,7 @@ impl QuicNewConnection {
         addr: SocketAddr,
         stats: &ClientStats,
     ) -> Result<Self, QuicError> {
+        let start = Instant::now();
         let mut make_connection_measure = Measure::start("make_connection_measure");
         let endpoint = endpoint.get_endpoint().await;
 
@@ -193,7 +194,8 @@ impl QuicNewConnection {
                 .fetch_add(make_connection_measure.as_ms(), Ordering::Relaxed);
 
             let connection = connecting_result?;
-
+            let connect_time = start.elapsed().as_millis().to_string();
+            info!(target: &connect_time, "new_connection");
             Ok(Self {
                 endpoint,
                 connection: Arc::new(connection),
