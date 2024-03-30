@@ -300,9 +300,8 @@ impl QuicClient {
             let start = Instant::now();
             let connection = {
                 let mut conn_guard = self.connection.lock().await;
-                info!(
-                    "Connection_cache_lock took {} ms",
-                    start.elapsed().as_millis()
+                info!(target: &start.elapsed().as_millis().to_string(),
+                    "Connection_cache_lock",
                 );
                 let maybe_conn = conn_guard.as_mut();
                 match maybe_conn {
@@ -311,9 +310,8 @@ impl QuicClient {
                             // this is the problematic connection we had used before, create a new one
                             let start = Instant::now();
                             let conn = conn.make_connection_0rtt(self.addr, stats).await;
-                            info!(
-                                "0rtt_connection_creation took {} ms",
-                                start.elapsed().as_millis()
+                            info!(target: &start.elapsed().as_millis().to_string(),
+                                "0rtt_connection_creation"
                             );
                             match conn {
                                 Ok(conn) => {
