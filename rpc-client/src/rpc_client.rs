@@ -4385,6 +4385,7 @@ mod tests {
                             min_context_slot: None,
                         },
                         with_context: None,
+                        collect_unsorted: None,
                     },
                 )
                 .unwrap();
@@ -4419,6 +4420,7 @@ mod tests {
                             min_context_slot: None,
                         },
                         with_context: Some(true),
+                        collect_unsorted: None,
                     },
                 )
                 .unwrap();

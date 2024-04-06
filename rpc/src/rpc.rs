@@ -474,6 +474,7 @@ impl JsonRpcRequestProcessor {
         config: Option<RpcAccountInfoConfig>,
         mut filters: Vec<RpcFilterType>,
         with_context: bool,
+        collect_unsorted: bool,
     ) -> Result<OptionalContext<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
@@ -489,11 +490,23 @@ impl JsonRpcRequestProcessor {
         optimize_filters(&mut filters);
         let keyed_accounts = {
             if let Some(owner) = get_spl_token_owner_filter(program_id, &filters) {
-                self.get_filtered_spl_token_accounts_by_owner(&bank, program_id, &owner, filters)?
+                self.get_filtered_spl_token_accounts_by_owner(
+                    &bank,
+                    program_id,
+                    &owner,
+                    filters,
+                    collect_unsorted,
+                )?
             } else if let Some(mint) = get_spl_token_mint_filter(program_id, &filters) {
-                self.get_filtered_spl_token_accounts_by_mint(&bank, program_id, &mint, filters)?
+                self.get_filtered_spl_token_accounts_by_mint(
+                    &bank,
+                    program_id,
+                    &mint,
+                    filters,
+                    collect_unsorted,
+                )?
             } else {
-                self.get_filtered_program_accounts(&bank, program_id, filters)?
+                self.get_filtered_program_accounts(&bank, program_id, filters, collect_unsorted)?
             }
         };
         let accounts = if is_known_spl_token_id(program_id)
@@ -1890,6 +1903,7 @@ impl JsonRpcRequestProcessor {
         owner: &Pubkey,
         token_account_filter: TokenAccountsFilter,
         config: Option<RpcAccountInfoConfig>,
+        collect_unsorted: bool,
     ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
@@ -1918,6 +1932,7 @@ impl JsonRpcRequestProcessor {
             &token_program_id,
             owner,
             filters,
+            collect_unsorted,
         )?;
         let accounts = if encoding == UiAccountEncoding::JsonParsed {
             get_parsed_token_accounts(bank.clone(), keyed_accounts.into_iter()).collect()
@@ -1940,6 +1955,7 @@ impl JsonRpcRequestProcessor {
         delegate: &Pubkey,
         token_account_filter: TokenAccountsFilter,
         config: Option<RpcAccountInfoConfig>,
+        collect_unsorted: bool,
     ) -> Result<RpcResponse<Vec<RpcKeyedAccount>>> {
         let RpcAccountInfoConfig {
             encoding,
@@ -1965,11 +1981,17 @@ impl JsonRpcRequestProcessor {
         ];
         // Optional filter on Mint address, uses mint account index for scan
         let keyed_accounts = if let Some(mint) = mint {
-            self.get_filtered_spl_token_accounts_by_mint(&bank, &token_program_id, &mint, filters)?
+            self.get_filtered_spl_token_accounts_by_mint(
+                &bank,
+                &token_program_id,
+                &mint,
+                filters,
+                collect_unsorted,
+            )?
         } else {
             // Filter on Token Account state
             filters.push(RpcFilterType::TokenAccountState);
-            self.get_filtered_program_accounts(&bank, &token_program_id, filters)?
+            self.get_filtered_program_accounts(&bank, &token_program_id, filters, collect_unsorted)?
         };
         let accounts = if encoding == UiAccountEncoding::JsonParsed {
             get_parsed_token_accounts(bank.clone(), keyed_accounts.into_iter()).collect()
@@ -1993,6 +2015,7 @@ impl JsonRpcRequestProcessor {
         bank: &Bank,
         program_id: &Pubkey,
         mut filters: Vec<RpcFilterType>,
+        collect_unsorted: bool,
     ) -> RpcCustomResult<Vec<(Pubkey, AccountSharedData)>> {
         optimize_filters(&mut filters);
         let filter_closure = |account: &AccountSharedData| {
@@ -2021,7 +2044,7 @@ impl JsonRpcRequestProcessor {
                         // accounts.
                         account.owner() == program_id && filter_closure(account)
                     },
-                    &ScanConfig::default(),
+                    &ScanConfig::new(collect_unsorted),
                     bank.byte_limit_for_scans(),
                 )
                 .map_err(|e| RpcCustomError::ScanError {
@@ -2030,7 +2053,11 @@ impl JsonRpcRequestProcessor {
         } else {
             // this path does not need to provide a mb limit because we only want to support secondary indexes
             Ok(bank
-                .get_filtered_program_accounts(program_id, filter_closure, &ScanConfig::default())
+                .get_filtered_program_accounts(
+                    program_id,
+                    filter_closure,
+                    &ScanConfig::new(collect_unsorted),
+                )
                 .map_err(|e| RpcCustomError::ScanError {
                     message: e.to_string(),
                 })?)
@@ -2044,6 +2071,7 @@ impl JsonRpcRequestProcessor {
         program_id: &Pubkey,
         owner_key: &Pubkey,
         mut filters: Vec<RpcFilterType>,
+        collect_unstored: bool,
     ) -> RpcCustomResult<Vec<(Pubkey, AccountSharedData)>> {
         // The by-owner accounts index checks for Token Account state and Owner address on
         // inclusion. However, due to the current AccountsDb implementation, an account may remain
@@ -2077,14 +2105,14 @@ impl JsonRpcRequestProcessor {
                                 .iter()
                                 .all(|filter_type| filter_type.allows(account))
                     },
-                    &ScanConfig::default(),
+                    &ScanConfig::new(collect_unstored),
                     bank.byte_limit_for_scans(),
                 )
                 .map_err(|e| RpcCustomError::ScanError {
                     message: e.to_string(),
                 })?)
         } else {
-            self.get_filtered_program_accounts(bank, program_id, filters)
+            self.get_filtered_program_accounts(bank, program_id, filters, collect_unstored)
         }
     }
 
@@ -2095,6 +2123,7 @@ impl JsonRpcRequestProcessor {
         program_id: &Pubkey,
         mint_key: &Pubkey,
         mut filters: Vec<RpcFilterType>,
+        collect_unsorted: bool,
     ) -> RpcCustomResult<Vec<(Pubkey, AccountSharedData)>> {
         // The by-mint accounts index checks for Token Account state and Mint address on inclusion.
         // However, due to the current AccountsDb implementation, an account may remain in storage
@@ -2127,14 +2156,14 @@ impl JsonRpcRequestProcessor {
                                 .iter()
                                 .all(|filter_type| filter_type.allows(account))
                     },
-                    &ScanConfig::default(),
+                    &ScanConfig::new(collect_unsorted),
                     bank.byte_limit_for_scans(),
                 )
                 .map_err(|e| RpcCustomError::ScanError {
                     message: e.to_string(),
                 })?)
         } else {
-            self.get_filtered_program_accounts(bank, program_id, filters)
+            self.get_filtered_program_accounts(bank, program_id, filters, collect_unsorted)
         }
     }
 
@@ -3178,14 +3207,15 @@ pub mod rpc_accounts_scan {
                 program_id_str
             );
             let program_id = verify_pubkey(&program_id_str)?;
-            let (config, filters, with_context) = if let Some(config) = config {
+            let (config, filters, with_context, collect_unsorted) = if let Some(config) = config {
                 (
                     Some(config.account_config),
                     config.filters.unwrap_or_default(),
                     config.with_context.unwrap_or_default(),
+                    config.collect_unsorted.unwrap_or_default(),
                 )
             } else {
-                (None, vec![], false)
+                (None, vec![], false, false)
             };
             if filters.len() > MAX_GET_PROGRAM_ACCOUNT_FILTERS {
                 return Err(Error::invalid_params(format!(
@@ -3195,7 +3225,7 @@ pub mod rpc_accounts_scan {
             for filter in &filters {
                 verify_filter(filter)?;
             }
-            meta.get_program_accounts(&program_id, config, filters, with_context)
+            meta.get_program_accounts(&program_id, config, filters, with_context, collect_unsorted)
         }
 
         fn get_largest_accounts(
@@ -3243,7 +3273,7 @@ pub mod rpc_accounts_scan {
             );
             let owner = verify_pubkey(&owner_str)?;
             let token_account_filter = verify_token_account_filter(token_account_filter)?;
-            meta.get_token_accounts_by_owner(&owner, token_account_filter, config)
+            meta.get_token_accounts_by_owner(&owner, token_account_filter, config, true)
         }
 
         fn get_token_accounts_by_delegate(
@@ -3259,7 +3289,7 @@ pub mod rpc_accounts_scan {
             );
             let delegate = verify_pubkey(&delegate_str)?;
             let token_account_filter = verify_token_account_filter(token_account_filter)?;
-            meta.get_token_accounts_by_delegate(&delegate, token_account_filter, config)
+            meta.get_token_accounts_by_delegate(&delegate, token_account_filter, config, true)
         }
     }
 }
