@@ -4222,7 +4222,7 @@ pub mod tests {
         }
 
         let config = ScanConfig::default();
-        assert!(!config.collect_all_unsorted);
+        assert!(config.collect_all_unsorted);
         assert!(config.abort.is_none());
 
         let config = config.recreate_with_abort();
