@@ -7,12 +7,16 @@ use {
         root_ca_certificate, CredentialType,
     },
     backoff::{future::retry, ExponentialBackoff},
+    bincode::de::read,
     log::*,
+    solana_metrics::datapoint,
     std::{
+        fmt::Display,
         str::FromStr,
         time::{Duration, Instant},
     },
     thiserror::Error,
+    tokio::time::error::Elapsed,
     tonic::{codegen::InterceptedService, transport::ClientTlsConfig, Request, Status},
 };
 
@@ -82,6 +86,23 @@ pub enum Error {
 
     #[error("Timeout")]
     Timeout,
+}
+
+#[derive(Clone, Debug)]
+pub enum TableName {
+    Tx,
+    Blocks,
+    TxByAddr,
+}
+
+impl Display for TableName {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            TableName::Tx => write!(f, "tx"),
+            TableName::Blocks => write!(f, "blocks"),
+            TableName::TxByAddr => write!(f, "tx-by-addr"),
+        }
+    }
 }
 
 impl std::convert::From<std::io::Error> for Error {
@@ -270,7 +291,7 @@ impl BigTableConnection {
 
     pub async fn put_bincode_cells_with_retry<T>(
         &self,
-        table: &str,
+        table: &TableName,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -283,7 +304,11 @@ impl BigTableConnection {
         .await
     }
 
-    pub async fn delete_rows_with_retry(&self, table: &str, row_keys: &[RowKey]) -> Result<()> {
+    pub async fn delete_rows_with_retry(
+        &self,
+        table: &TableName,
+        row_keys: &[RowKey],
+    ) -> Result<()> {
         retry(ExponentialBackoff::default(), || async {
             let mut client = self.client();
             Ok(client.delete_rows(table, row_keys).await?)
@@ -293,7 +318,7 @@ impl BigTableConnection {
 
     pub async fn get_bincode_cells_with_retry<T>(
         &self,
-        table: &str,
+        table: &TableName,
         row_keys: &[RowKey],
     ) -> Result<Vec<(RowKey, Result<T>)>>
     where
@@ -308,7 +333,7 @@ impl BigTableConnection {
 
     pub async fn put_protobuf_cells_with_retry<T>(
         &self,
-        table: &str,
+        table: &TableName,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -346,7 +371,13 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         let mut cell_version_ok = true;
         let started = Instant::now();
 
-        while let Some(res) = rrr.message().await? {
+        while let Some(res) = tokio::time::timeout(
+            self.timeout.unwrap_or(Duration::from_secs(30)),
+            rrr.message(),
+        )
+        .await
+        .map_err(|_| Error::Timeout)??
+        {
             if let Some(timeout) = self.timeout {
                 if Instant::now().duration_since(started) > timeout {
                     return Err(Error::Timeout);
@@ -428,7 +459,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// If `rows_limit` is zero, this method will return an empty array.
     pub async fn get_row_keys(
         &mut self,
-        table_name: &str,
+        table_name: &TableName,
         start_at: Option<RowKey>,
         end_at: Option<RowKey>,
         rows_limit: i64,
@@ -438,42 +469,45 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         }
         self.refresh_access_token();
         let response = self
-            .client
-            .read_rows(ReadRowsRequest {
-                table_name: format!("{}{}", self.table_prefix, table_name),
-                app_profile_id: self.app_profile_id.clone(),
-                rows_limit,
-                rows: Some(RowSet {
-                    row_keys: vec![],
-                    row_ranges: vec![RowRange {
-                        start_key: start_at.map(|row_key| {
-                            row_range::StartKey::StartKeyClosed(row_key.into_bytes())
-                        }),
-                        end_key: end_at
-                            .map(|row_key| row_range::EndKey::EndKeyClosed(row_key.into_bytes())),
-                    }],
-                }),
-                filter: Some(RowFilter {
-                    filter: Some(row_filter::Filter::Chain(row_filter::Chain {
-                        filters: vec![
-                            RowFilter {
-                                // Return minimal number of cells
-                                filter: Some(row_filter::Filter::CellsPerRowLimitFilter(1)),
-                            },
-                            RowFilter {
-                                // Only return the latest version of each cell
-                                filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
-                            },
-                            RowFilter {
-                                // Strip the cell values
-                                filter: Some(row_filter::Filter::StripValueTransformer(true)),
-                            },
-                        ],
-                    })),
-                }),
-                request_stats_view: 0,
-                reversed: false,
-            })
+            .read_rows(
+                table_name,
+                ReadRowsRequest {
+                    table_name: format!("{}{}", self.table_prefix, table_name),
+                    app_profile_id: self.app_profile_id.clone(),
+                    rows_limit,
+                    rows: Some(RowSet {
+                        row_keys: vec![],
+                        row_ranges: vec![RowRange {
+                            start_key: start_at.map(|row_key| {
+                                row_range::StartKey::StartKeyClosed(row_key.into_bytes())
+                            }),
+                            end_key: end_at.map(|row_key| {
+                                row_range::EndKey::EndKeyClosed(row_key.into_bytes())
+                            }),
+                        }],
+                    }),
+                    filter: Some(RowFilter {
+                        filter: Some(row_filter::Filter::Chain(row_filter::Chain {
+                            filters: vec![
+                                RowFilter {
+                                    // Return minimal number of cells
+                                    filter: Some(row_filter::Filter::CellsPerRowLimitFilter(1)),
+                                },
+                                RowFilter {
+                                    // Only return the latest version of each cell
+                                    filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
+                                },
+                                RowFilter {
+                                    // Strip the cell values
+                                    filter: Some(row_filter::Filter::StripValueTransformer(true)),
+                                },
+                            ],
+                        })),
+                    }),
+                    request_stats_view: 0,
+                    reversed: false,
+                },
+            )
             .await?
             .into_inner();
 
@@ -482,25 +516,31 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     }
 
     /// Check whether a row key exists in a `table`
-    pub async fn row_key_exists(&mut self, table_name: &str, row_key: RowKey) -> Result<bool> {
+    pub async fn row_key_exists(
+        &mut self,
+        table_name: &TableName,
+        row_key: RowKey,
+    ) -> Result<bool> {
         self.refresh_access_token();
 
         let response = self
-            .client
-            .read_rows(ReadRowsRequest {
-                table_name: format!("{}{}", self.table_prefix, table_name),
-                app_profile_id: self.app_profile_id.clone(),
-                rows_limit: 1,
-                rows: Some(RowSet {
-                    row_keys: vec![row_key.into_bytes()],
-                    row_ranges: vec![],
-                }),
-                filter: Some(RowFilter {
-                    filter: Some(row_filter::Filter::StripValueTransformer(true)),
-                }),
-                request_stats_view: 0,
-                reversed: false,
-            })
+            .read_rows(
+                table_name,
+                ReadRowsRequest {
+                    table_name: format!("{}{}", self.table_prefix, table_name),
+                    app_profile_id: self.app_profile_id.clone(),
+                    rows_limit: 1,
+                    rows: Some(RowSet {
+                        row_keys: vec![row_key.into_bytes()],
+                        row_ranges: vec![],
+                    }),
+                    filter: Some(RowFilter {
+                        filter: Some(row_filter::Filter::StripValueTransformer(true)),
+                    }),
+                    request_stats_view: 0,
+                    reversed: false,
+                },
+            )
             .await?
             .into_inner();
 
@@ -522,7 +562,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// If `rows_limit` is zero, this method will return an empty array.
     pub async fn get_row_data(
         &mut self,
-        table_name: &str,
+        table_name: &TableName,
         start_at: Option<RowKey>,
         end_at: Option<RowKey>,
         rows_limit: i64,
@@ -532,28 +572,31 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         }
         self.refresh_access_token();
         let response = self
-            .client
-            .read_rows(ReadRowsRequest {
-                table_name: format!("{}{}", self.table_prefix, table_name),
-                app_profile_id: self.app_profile_id.clone(),
-                rows_limit,
-                rows: Some(RowSet {
-                    row_keys: vec![],
-                    row_ranges: vec![RowRange {
-                        start_key: start_at.map(|row_key| {
-                            row_range::StartKey::StartKeyClosed(row_key.into_bytes())
-                        }),
-                        end_key: end_at
-                            .map(|row_key| row_range::EndKey::EndKeyClosed(row_key.into_bytes())),
-                    }],
-                }),
-                filter: Some(RowFilter {
-                    // Only return the latest version of each cell
-                    filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
-                }),
-                request_stats_view: 0,
-                reversed: false,
-            })
+            .read_rows(
+                table_name,
+                ReadRowsRequest {
+                    table_name: format!("{}{}", self.table_prefix, table_name),
+                    app_profile_id: self.app_profile_id.clone(),
+                    rows_limit,
+                    rows: Some(RowSet {
+                        row_keys: vec![],
+                        row_ranges: vec![RowRange {
+                            start_key: start_at.map(|row_key| {
+                                row_range::StartKey::StartKeyClosed(row_key.into_bytes())
+                            }),
+                            end_key: end_at.map(|row_key| {
+                                row_range::EndKey::EndKeyClosed(row_key.into_bytes())
+                            }),
+                        }],
+                    }),
+                    filter: Some(RowFilter {
+                        // Only return the latest version of each cell
+                        filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
+                    }),
+                    request_stats_view: 0,
+                    reversed: false,
+                },
+            )
             .await?
             .into_inner();
 
@@ -563,31 +606,33 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// Get latest data from multiple rows of `table`, if those rows exist.
     pub async fn get_multi_row_data(
         &mut self,
-        table_name: &str,
+        table_name: &TableName,
         row_keys: &[RowKey],
     ) -> Result<Vec<(RowKey, RowData)>> {
         self.refresh_access_token();
 
         let response = self
-            .client
-            .read_rows(ReadRowsRequest {
-                table_name: format!("{}{}", self.table_prefix, table_name),
-                app_profile_id: self.app_profile_id.clone(),
-                rows_limit: 0, // return all existing rows
-                rows: Some(RowSet {
-                    row_keys: row_keys
-                        .iter()
-                        .map(|k| k.as_bytes().to_vec())
-                        .collect::<Vec<_>>(),
-                    row_ranges: vec![],
-                }),
-                filter: Some(RowFilter {
-                    // Only return the latest version of each cell
-                    filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
-                }),
-                request_stats_view: 0,
-                reversed: false,
-            })
+            .read_rows(
+                table_name,
+                ReadRowsRequest {
+                    table_name: format!("{}{}", self.table_prefix, table_name),
+                    app_profile_id: self.app_profile_id.clone(),
+                    rows_limit: 0, // return all existing rows
+                    rows: Some(RowSet {
+                        row_keys: row_keys
+                            .iter()
+                            .map(|k| k.as_bytes().to_vec())
+                            .collect::<Vec<_>>(),
+                        row_ranges: vec![],
+                    }),
+                    filter: Some(RowFilter {
+                        // Only return the latest version of each cell
+                        filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
+                    }),
+                    request_stats_view: 0,
+                    reversed: false,
+                },
+            )
             .await?
             .into_inner();
 
@@ -601,28 +646,30 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// returned.
     pub async fn get_single_row_data(
         &mut self,
-        table_name: &str,
+        table_name: &TableName,
         row_key: RowKey,
     ) -> Result<RowData> {
         self.refresh_access_token();
 
         let response = self
-            .client
-            .read_rows(ReadRowsRequest {
-                table_name: format!("{}{}", self.table_prefix, table_name),
-                app_profile_id: self.app_profile_id.clone(),
-                rows_limit: 1,
-                rows: Some(RowSet {
-                    row_keys: vec![row_key.into_bytes()],
-                    row_ranges: vec![],
-                }),
-                filter: Some(RowFilter {
-                    // Only return the latest version of each cell
-                    filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
-                }),
-                request_stats_view: 0,
-                reversed: false,
-            })
+            .read_rows(
+                table_name,
+                ReadRowsRequest {
+                    table_name: format!("{}{}", self.table_prefix, table_name),
+                    app_profile_id: self.app_profile_id.clone(),
+                    rows_limit: 1,
+                    rows: Some(RowSet {
+                        row_keys: vec![row_key.into_bytes()],
+                        row_ranges: vec![],
+                    }),
+                    filter: Some(RowFilter {
+                        // Only return the latest version of each cell
+                        filter: Some(row_filter::Filter::CellsPerColumnLimitFilter(1)),
+                    }),
+                    request_stats_view: 0,
+                    reversed: false,
+                },
+            )
             .await?
             .into_inner();
 
@@ -634,7 +681,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     }
 
     /// Delete one or more `table` rows
-    async fn delete_rows(&mut self, table_name: &str, row_keys: &[RowKey]) -> Result<()> {
+    async fn delete_rows(&mut self, table_name: &TableName, row_keys: &[RowKey]) -> Result<()> {
         self.refresh_access_token();
 
         let mut entries = vec![];
@@ -677,7 +724,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// Store data for one or more `table` rows in the `family_name` Column family
     async fn put_row_data(
         &mut self,
-        table_name: &str,
+        table_name: &TableName,
         family_name: &str,
         row_data: &[(&RowKey, RowData)],
     ) -> Result<()> {
@@ -728,7 +775,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         Ok(())
     }
 
-    pub async fn get_bincode_cell<T>(&mut self, table: &str, key: RowKey) -> Result<T>
+    pub async fn get_bincode_cell<T>(&mut self, table: &TableName, key: RowKey) -> Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -738,7 +785,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn get_bincode_cells<T>(
         &mut self,
-        table: &str,
+        table: &TableName,
         keys: &[RowKey],
     ) -> Result<Vec<(RowKey, Result<T>)>>
     where
@@ -760,7 +807,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn get_protobuf_or_bincode_cell<B, P>(
         &mut self,
-        table: &str,
+        table: &TableName,
         key: RowKey,
     ) -> Result<CellData<B, P>>
     where
@@ -773,7 +820,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn get_protobuf_or_bincode_cells<'a, B, P>(
         &mut self,
-        table: &'a str,
+        table: &'a TableName,
         row_keys: impl IntoIterator<Item = RowKey>,
     ) -> Result<impl Iterator<Item = (RowKey, CellData<B, P>)> + 'a>
     where
@@ -798,7 +845,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn put_bincode_cells<T>(
         &mut self,
-        table: &str,
+        table: &TableName,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -818,7 +865,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn put_protobuf_cells<T>(
         &mut self,
-        table: &str,
+        table: &TableName,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -837,11 +884,34 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         self.put_row_data(table, "x", &new_row_data).await?;
         Ok(bytes_written)
     }
+
+    async fn read_rows(
+        &mut self,
+        table_name: &TableName,
+        request: ReadRowsRequest,
+    ) -> Result<tonic::Response<tonic::Streaming<ReadRowsResponse>>> {
+        let datapoint_bigtable = match table_name {
+            TableName::Blocks => "bigtable_blocks",
+            TableName::Tx => "bigtable_tx",
+            TableName::TxByAddr => "bigtable_tx-by-addr",
+        };
+        datapoint_info!(datapoint_bigtable, ("read_rows", 1, i64));
+        tokio::time::timeout(
+            self.timeout.unwrap_or(Duration::from_secs(30)),
+            self.client.read_rows(request),
+        )
+        .await
+        .map_err(|_| {
+            datapoint_error!(datapoint_bigtable, ("timeout", 1, i64));
+            Error::Timeout
+        })?
+        .map_err(Error::from)
+    }
 }
 
 pub(crate) fn deserialize_protobuf_or_bincode_cell_data<B, P>(
     row_data: RowDataSlice,
-    table: &str,
+    table: &TableName,
     key: RowKey,
 ) -> Result<CellData<B, P>>
 where
@@ -860,7 +930,7 @@ where
 
 pub(crate) fn deserialize_protobuf_cell_data<T>(
     row_data: RowDataSlice,
-    table: &str,
+    table: &TableName,
     key: RowKey,
 ) -> Result<T>
 where
@@ -881,7 +951,7 @@ where
 
 pub(crate) fn deserialize_bincode_cell_data<T>(
     row_data: RowDataSlice,
-    table: &str,
+    table: &TableName,
     key: RowKey,
 ) -> Result<T>
 where
@@ -986,7 +1056,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("proto".to_string(), protobuf_block.clone())],
-            "",
+            &TableName::Tx,
             "".to_string(),
         )
         .unwrap();
@@ -1001,7 +1071,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("bin".to_string(), bincode_block.clone())],
-            "",
+            &TableName::Tx,
             "".to_string(),
         )
         .unwrap();
@@ -1028,15 +1098,9 @@ mod tests {
         let result = deserialize_protobuf_or_bincode_cell_data::<
             StoredConfirmedBlock,
             generated::ConfirmedBlock,
-        >(&[("proto".to_string(), bincode_block)], "", "".to_string());
-        assert!(result.is_err());
-
-        let result = deserialize_protobuf_or_bincode_cell_data::<
-            StoredConfirmedBlock,
-            generated::ConfirmedBlock,
         >(
-            &[("proto".to_string(), vec![1, 2, 3, 4])],
-            "",
+            &[("proto".to_string(), bincode_block)],
+            &TableName::Tx,
             "".to_string(),
         );
         assert!(result.is_err());
@@ -1044,13 +1108,31 @@ mod tests {
         let result = deserialize_protobuf_or_bincode_cell_data::<
             StoredConfirmedBlock,
             generated::ConfirmedBlock,
-        >(&[("bin".to_string(), protobuf_block)], "", "".to_string());
+        >(
+            &[("proto".to_string(), vec![1, 2, 3, 4])],
+            &TableName::Tx,
+            "".to_string(),
+        );
         assert!(result.is_err());
 
         let result = deserialize_protobuf_or_bincode_cell_data::<
             StoredConfirmedBlock,
             generated::ConfirmedBlock,
-        >(&[("bin".to_string(), vec![1, 2, 3, 4])], "", "".to_string());
+        >(
+            &[("bin".to_string(), protobuf_block)],
+            &TableName::Tx,
+            "".to_string(),
+        );
+        assert!(result.is_err());
+
+        let result = deserialize_protobuf_or_bincode_cell_data::<
+            StoredConfirmedBlock,
+            generated::ConfirmedBlock,
+        >(
+            &[("bin".to_string(), vec![1, 2, 3, 4])],
+            &TableName::Tx,
+            "".to_string(),
+        );
         assert!(result.is_err());
     }
 }

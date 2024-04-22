@@ -510,7 +510,9 @@ impl LedgerStorage {
         trace!("LedgerStorage::get_first_available_block request received");
         self.stats.increment_num_queries();
         let mut bigtable = self.connection.client();
-        let blocks = bigtable.get_row_keys("blocks", None, None, 1).await?;
+        let blocks = bigtable
+            .get_row_keys(&bigtable::TableName::Blocks, None, None, 1)
+            .await?;
         if blocks.is_empty() {
             return Ok(None);
         }
@@ -531,7 +533,7 @@ impl LedgerStorage {
         let mut bigtable = self.connection.client();
         let blocks = bigtable
             .get_row_keys(
-                "blocks",
+                &bigtable::TableName::Blocks,
                 Some(slot_to_blocks_key(start_slot)),
                 None,
                 limit as i64,
@@ -553,7 +555,7 @@ impl LedgerStorage {
         let mut bigtable = self.connection.client();
         let row_keys = slots.iter().copied().map(slot_to_blocks_key);
         let data = bigtable
-            .get_protobuf_or_bincode_cells("blocks", row_keys)
+            .get_protobuf_or_bincode_cells(&bigtable::TableName::Blocks, row_keys)
             .await?
             .filter_map(
                 |(row_key, block_cell_data): (
@@ -580,7 +582,7 @@ impl LedgerStorage {
         let mut bigtable = self.connection.client();
         let block_cell_data = bigtable
             .get_protobuf_or_bincode_cell::<StoredConfirmedBlock, generated::ConfirmedBlock>(
-                "blocks",
+                &bigtable::TableName::Blocks,
                 slot_to_blocks_key(slot),
             )
             .await
@@ -606,7 +608,7 @@ impl LedgerStorage {
         let mut bigtable = self.connection.client();
 
         let block_exists = bigtable
-            .row_key_exists("blocks", slot_to_blocks_key(slot))
+            .row_key_exists(&bigtable::TableName::Blocks, slot_to_blocks_key(slot))
             .await?;
 
         Ok(block_exists)
@@ -620,7 +622,7 @@ impl LedgerStorage {
         self.stats.increment_num_queries();
         let mut bigtable = self.connection.client();
         let transaction_info = bigtable
-            .get_bincode_cell::<TransactionInfo>("tx", signature.to_string())
+            .get_bincode_cell::<TransactionInfo>(&bigtable::TableName::Tx, signature.to_string())
             .await
             .map_err(|err| match err {
                 bigtable::Error::RowNotFound => Error::SignatureNotFound,
@@ -644,7 +646,7 @@ impl LedgerStorage {
         // Fetch transactions info
         let keys = signatures.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         let cells = bigtable
-            .get_bincode_cells::<TransactionInfo>("tx", &keys)
+            .get_bincode_cells::<TransactionInfo>(&bigtable::TableName::Tx, &keys)
             .await?;
 
         // Collect by slot
@@ -705,7 +707,7 @@ impl LedgerStorage {
 
         // Figure out which block the transaction is located in
         let TransactionInfo { slot, index, .. } = bigtable
-            .get_bincode_cell("tx", signature.to_string())
+            .get_bincode_cell(&bigtable::TableName::Tx, signature.to_string())
             .await
             .map_err(|err| match err {
                 bigtable::Error::RowNotFound => Error::SignatureNotFound,
@@ -769,7 +771,7 @@ impl LedgerStorage {
             None => (Slot::MAX, 0),
             Some(before_signature) => {
                 let TransactionInfo { slot, index, .. } = bigtable
-                    .get_bincode_cell("tx", before_signature.to_string())
+                    .get_bincode_cell(&bigtable::TableName::Tx, before_signature.to_string())
                     .await?;
 
                 (slot, index)
@@ -781,7 +783,7 @@ impl LedgerStorage {
             None => (0, u32::MAX),
             Some(until_signature) => {
                 let TransactionInfo { slot, index, .. } = bigtable
-                    .get_bincode_cell("tx", until_signature.to_string())
+                    .get_bincode_cell(&bigtable::TableName::Tx, until_signature.to_string())
                     .await?;
 
                 (slot, index)
@@ -792,7 +794,7 @@ impl LedgerStorage {
 
         let starting_slot_tx_len = bigtable
             .get_protobuf_or_bincode_cell::<Vec<LegacyTransactionByAddrInfo>, tx_by_addr::TransactionByAddr>(
-                "tx-by-addr",
+                &bigtable::TableName::TxByAddr,
                 format!("{}{}", address_prefix, slot_to_tx_by_addr_key(first_slot)),
             )
             .await
@@ -808,7 +810,7 @@ impl LedgerStorage {
         // number that might be flitered out
         let tx_by_addr_data = bigtable
             .get_row_data(
-                "tx-by-addr",
+                &bigtable::TableName::TxByAddr,
                 Some(format!(
                     "{}{}",
                     address_prefix,
@@ -830,10 +832,11 @@ impl LedgerStorage {
                 ))
             })?;
 
-            let deserialized_cell_data = bigtable::deserialize_protobuf_or_bincode_cell_data::<
-                Vec<LegacyTransactionByAddrInfo>,
-                tx_by_addr::TransactionByAddr,
-            >(&data, "tx-by-addr", row_key.clone())?;
+            let deserialized_cell_data =
+                bigtable::deserialize_protobuf_or_bincode_cell_data::<
+                    Vec<LegacyTransactionByAddrInfo>,
+                    tx_by_addr::TransactionByAddr,
+                >(&data, &bigtable::TableName::TxByAddr, row_key.clone())?;
 
             let mut cell_data: Vec<TransactionByAddrInfo> = match deserialized_cell_data {
                 bigtable::CellData::Bincode(tx_by_addr) => {
@@ -945,8 +948,11 @@ impl LedgerStorage {
         if !tx_cells.is_empty() {
             let conn = self.connection.clone();
             tasks.push(tokio::spawn(async move {
-                conn.put_bincode_cells_with_retry::<TransactionInfo>("tx", &tx_cells)
-                    .await
+                conn.put_bincode_cells_with_retry::<TransactionInfo>(
+                    &bigtable::TableName::Tx,
+                    &tx_cells,
+                )
+                .await
             }));
         }
 
@@ -954,7 +960,7 @@ impl LedgerStorage {
             let conn = self.connection.clone();
             tasks.push(tokio::spawn(async move {
                 conn.put_protobuf_cells_with_retry::<tx_by_addr::TransactionByAddr>(
-                    "tx-by-addr",
+                    &bigtable::TableName::TxByAddr,
                     &tx_by_addr_cells,
                 )
                 .await
@@ -995,7 +1001,10 @@ impl LedgerStorage {
         let blocks_cells = [(slot_to_blocks_key(slot), confirmed_block.into())];
         bytes_written += self
             .connection
-            .put_protobuf_cells_with_retry::<generated::ConfirmedBlock>("blocks", &blocks_cells)
+            .put_protobuf_cells_with_retry::<generated::ConfirmedBlock>(
+                &bigtable::TableName::Blocks,
+                &blocks_cells,
+            )
             .await?;
         datapoint_info!(
             "storage-bigtable-upload-block",
@@ -1058,7 +1067,10 @@ impl LedgerStorage {
             let signatures = expected_tx_infos.keys().cloned().collect::<Vec<_>>();
             let fetched_tx_infos: HashMap<String, std::result::Result<UploadedTransaction, _>> =
                 self.connection
-                    .get_bincode_cells_with_retry::<TransactionInfo>("tx", &signatures)
+                    .get_bincode_cells_with_retry::<TransactionInfo>(
+                        &bigtable::TableName::Tx,
+                        &signatures,
+                    )
                     .await?
                     .into_iter()
                     .map(|(signature, tx_info_res)| (signature, tx_info_res.map(Into::into)))
@@ -1097,18 +1109,18 @@ impl LedgerStorage {
         if !dry_run {
             if !address_slot_rows.is_empty() {
                 self.connection
-                    .delete_rows_with_retry("tx-by-addr", &address_slot_rows)
+                    .delete_rows_with_retry(&bigtable::TableName::TxByAddr, &address_slot_rows)
                     .await?;
             }
 
             if !tx_deletion_rows.is_empty() {
                 self.connection
-                    .delete_rows_with_retry("tx", &tx_deletion_rows)
+                    .delete_rows_with_retry(&bigtable::TableName::Tx, &tx_deletion_rows)
                     .await?;
             }
 
             self.connection
-                .delete_rows_with_retry("blocks", &[slot_to_blocks_key(slot)])
+                .delete_rows_with_retry(&bigtable::TableName::Blocks, &[slot_to_blocks_key(slot)])
                 .await?;
         }
 
