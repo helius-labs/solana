@@ -13,6 +13,7 @@ use {
         time::{Duration, Instant},
     },
     thiserror::Error,
+    tokio::time::error::Elapsed,
     tonic::{codegen::InterceptedService, transport::ClientTlsConfig, Request, Status},
 };
 
@@ -186,7 +187,6 @@ impl BigTableConnection {
                 let mut http = hyper::client::HttpConnector::new();
                 http.enforce_http(false);
                 http.set_nodelay(true);
-                http.set_connect_timeout(Some(Duration::from_secs(5)));
                 let channel = match std::env::var("BIGTABLE_PROXY") {
                     Ok(proxy_uri) => {
                         let proxy = hyper_proxy::Proxy::new(
@@ -347,7 +347,13 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         let mut cell_version_ok = true;
         let started = Instant::now();
 
-        while let Some(res) = rrr.message().await? {
+        while let Some(res) = tokio::time::timeout(
+            self.timeout.unwrap_or(Duration::from_secs(30)),
+            rrr.message(),
+        )
+        .await
+        .map_err(|_| Error::Timeout)??
+        {
             if let Some(timeout) = self.timeout {
                 if Instant::now().duration_since(started) > timeout {
                     return Err(Error::Timeout);
@@ -439,7 +445,6 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         }
         self.refresh_access_token();
         let response = self
-            .client
             .read_rows(ReadRowsRequest {
                 table_name: format!("{}{}", self.table_prefix, table_name),
                 app_profile_id: self.app_profile_id.clone(),
@@ -487,7 +492,6 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         self.refresh_access_token();
 
         let response = self
-            .client
             .read_rows(ReadRowsRequest {
                 table_name: format!("{}{}", self.table_prefix, table_name),
                 app_profile_id: self.app_profile_id.clone(),
@@ -533,7 +537,6 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         }
         self.refresh_access_token();
         let response = self
-            .client
             .read_rows(ReadRowsRequest {
                 table_name: format!("{}{}", self.table_prefix, table_name),
                 app_profile_id: self.app_profile_id.clone(),
@@ -570,7 +573,6 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         self.refresh_access_token();
 
         let response = self
-            .client
             .read_rows(ReadRowsRequest {
                 table_name: format!("{}{}", self.table_prefix, table_name),
                 app_profile_id: self.app_profile_id.clone(),
@@ -608,7 +610,6 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         self.refresh_access_token();
 
         let response = self
-            .client
             .read_rows(ReadRowsRequest {
                 table_name: format!("{}{}", self.table_prefix, table_name),
                 app_profile_id: self.app_profile_id.clone(),
@@ -837,6 +838,24 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
         self.put_row_data(table, "x", &new_row_data).await?;
         Ok(bytes_written)
+    }
+
+    async fn read_rows(
+        &mut self,
+        request: ReadRowsRequest,
+    ) -> Result<tonic::Response<tonic::Streaming<ReadRowsResponse>>> {
+        let datapoint_bigtable = format!("bigtable_{}", request.table_name.clone());
+        tokio::time::timeout(
+            self.timeout.unwrap_or(Duration::from_secs(30)),
+            self.client.read_rows(request),
+        )
+        .await
+        .map_err(|_| {
+            let datapoint_bigtable = datapoint_bigtable.clone();
+            datapoint_error!(datapoint_bigtable, ("timeout", 1, i64));
+            Error::Timeout
+        })?
+        .map_err(Error::from)
     }
 }
 
