@@ -7,7 +7,9 @@ use {
         root_ca_certificate, CredentialType,
     },
     backoff::{future::retry, ExponentialBackoff},
+    bincode::de::read,
     log::*,
+    solana_metrics::datapoint,
     std::{
         str::FromStr,
         time::{Duration, Instant},
@@ -845,6 +847,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         request: ReadRowsRequest,
     ) -> Result<tonic::Response<tonic::Streaming<ReadRowsResponse>>> {
         let datapoint_bigtable = format!("bigtable_{}", request.table_name.clone());
+        datapoint_info!(datapoint_bigtable, ("read_rows", 1, i64));
         tokio::time::timeout(
             self.timeout.unwrap_or(Duration::from_secs(30)),
             self.client.read_rows(request),
