@@ -1873,7 +1873,7 @@ impl JsonRpcRequestProcessor {
             ));
         }
         let mut token_balances: Vec<RpcTokenAccountBalance> = self
-            .get_filtered_spl_token_accounts_by_mint(&bank, &mint_owner, mint, vec![])?
+            .get_filtered_spl_token_accounts_by_mint(&bank, &mint_owner, mint, vec![], true)?
             .into_iter()
             .map(|(address, account)| {
                 let amount = StateWithExtensions::<TokenAccount>::unpack(account.data())
