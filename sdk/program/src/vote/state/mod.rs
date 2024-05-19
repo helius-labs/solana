@@ -46,12 +46,22 @@ pub const VOTE_CREDITS_GRACE_SLOTS: u8 = 2;
 
 // Maximum number of credits to award for a vote; this number of credits is awarded to votes on slots that land within the grace period. After that grace period, vote credits are reduced.
 pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
+<<<<<<< HEAD
+
+// Previous max per slot
+pub const VOTE_CREDITS_MAXIMUM_PER_SLOT_OLD: u8 = 8;
+=======
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
 
 // Previous max per slot
 pub const VOTE_CREDITS_MAXIMUM_PER_SLOT_OLD: u8 = 8;
 
-#[frozen_abi(digest = "Ch2vVEwos2EjAVqSHCyJjnN2MNX1yrpapZTGhMSCjWUH")]
-#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Clone, AbiExample)]
+#[cfg_attr(
+    feature = "frozen-abi",
+    frozen_abi(digest = "Ch2vVEwos2EjAVqSHCyJjnN2MNX1yrpapZTGhMSCjWUH"),
+    derive(AbiExample)
+)]
+#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct Vote {
     /// A stack of votes starting with the oldest vote
     pub slots: Vec<Slot>,
@@ -75,7 +85,8 @@ impl Vote {
     }
 }
 
-#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Copy, Clone, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Copy, Clone)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct Lockout {
     slot: Slot,
@@ -123,7 +134,8 @@ impl Lockout {
     }
 }
 
-#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Copy, Clone, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Copy, Clone)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct LandedVote {
     // Latency is the difference in slot number between the slot that was voted on (lockout.slot) and the slot in
@@ -158,8 +170,12 @@ impl From<Lockout> for LandedVote {
     }
 }
 
-#[frozen_abi(digest = "GwJfVFsATSj7nvKwtUkHYzqPRaPY6SLxPGXApuCya3x5")]
-#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Clone, AbiExample)]
+#[cfg_attr(
+    feature = "frozen-abi",
+    frozen_abi(digest = "GwJfVFsATSj7nvKwtUkHYzqPRaPY6SLxPGXApuCya3x5"),
+    derive(AbiExample)
+)]
+#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub struct VoteStateUpdate {
     /// The proposed tower
     pub lockouts: VecDeque<Lockout>,
@@ -207,6 +223,70 @@ impl VoteStateUpdate {
     }
 }
 
+#[cfg_attr(
+    feature = "frozen-abi",
+    frozen_abi(digest = "5VUusSTenF9vZ9eHiCprVe9ABJUHCubeDNCCDxykybZY"),
+    derive(AbiExample)
+)]
+#[derive(Serialize, Default, Deserialize, Debug, PartialEq, Eq, Clone)]
+pub struct TowerSync {
+    /// The proposed tower
+    pub lockouts: VecDeque<Lockout>,
+    /// The proposed root
+    pub root: Option<Slot>,
+    /// signature of the bank's state at the last slot
+    pub hash: Hash,
+    /// processing timestamp of last slot
+    pub timestamp: Option<UnixTimestamp>,
+    /// the unique identifier for the chain up to and
+    /// including this block. Does not require replaying
+    /// in order to compute.
+    pub block_id: Hash,
+}
+
+impl From<Vec<(Slot, u32)>> for TowerSync {
+    fn from(recent_slots: Vec<(Slot, u32)>) -> Self {
+        let lockouts: VecDeque<Lockout> = recent_slots
+            .into_iter()
+            .map(|(slot, confirmation_count)| {
+                Lockout::new_with_confirmation_count(slot, confirmation_count)
+            })
+            .collect();
+        Self {
+            lockouts,
+            root: None,
+            hash: Hash::default(),
+            timestamp: None,
+            block_id: Hash::default(),
+        }
+    }
+}
+
+impl TowerSync {
+    pub fn new(
+        lockouts: VecDeque<Lockout>,
+        root: Option<Slot>,
+        hash: Hash,
+        block_id: Hash,
+    ) -> Self {
+        Self {
+            lockouts,
+            root,
+            hash,
+            timestamp: None,
+            block_id,
+        }
+    }
+
+    pub fn slots(&self) -> Vec<Slot> {
+        self.lockouts.iter().map(|lockout| lockout.slot()).collect()
+    }
+
+    pub fn last_voted_slot(&self) -> Option<Slot> {
+        self.lockouts.back().map(|l| l.slot())
+    }
+}
+
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub struct VoteInit {
     pub node_pubkey: Pubkey,
@@ -236,7 +316,8 @@ pub struct VoteAuthorizeCheckedWithSeedArgs {
     pub current_authority_derived_key_seed: String,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct BlockTimestamp {
     pub slot: Slot,
@@ -246,7 +327,8 @@ pub struct BlockTimestamp {
 // this is how many epochs a voter can be remembered for slashing
 const MAX_ITEMS: usize = 32;
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 pub struct CircBuf<I> {
     buf: [I; MAX_ITEMS],
     /// next pointer
@@ -285,7 +367,7 @@ impl<I> CircBuf<I> {
 
     pub fn last(&self) -> Option<&I> {
         if !self.is_empty {
-            Some(&self.buf[self.idx])
+            self.buf.get(self.idx)
         } else {
             None
         }
@@ -309,8 +391,12 @@ where
     }
 }
 
-#[frozen_abi(digest = "EeenjJaSrm9hRM39gK6raRNtzG61hnk7GciUCJJRDUSQ")]
-#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone, AbiExample)]
+#[cfg_attr(
+    feature = "frozen-abi",
+    frozen_abi(digest = "EeenjJaSrm9hRM39gK6raRNtzG61hnk7GciUCJJRDUSQ"),
+    derive(AbiExample)
+)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[cfg_attr(test, derive(Arbitrary))]
 pub struct VoteState {
     /// the node that votes in this account
@@ -505,7 +591,7 @@ impl VoteState {
 
         VoteState {
             votes: VecDeque::from(vec![LandedVote::default(); MAX_LOCKOUT_HISTORY]),
-            root_slot: Some(std::u64::MAX),
+            root_slot: Some(u64::MAX),
             epoch_credits: vec![(0, 0, 0); MAX_EPOCH_CREDITS_HISTORY],
             authorized_voters,
             ..Self::default()
@@ -727,7 +813,9 @@ impl VoteState {
             // 2) not be equal to latest epoch otherwise this
             //    function would have returned TooSoonToReauthorize error
             //    above
-            assert!(target_epoch > *latest_epoch);
+            if target_epoch <= *latest_epoch {
+                return Err(InstructionError::InvalidAccountData);
+            }
 
             // Commit the new state
             self.prior_voters.append((
@@ -819,14 +907,15 @@ pub mod serde_compact_vote_state_update {
         serde::{Deserialize, Deserializer, Serialize, Serializer},
     };
 
-    #[derive(Deserialize, Serialize, AbiExample)]
+    #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+    #[derive(serde_derive::Deserialize, serde_derive::Serialize)]
     struct LockoutOffset {
         #[serde(with = "serde_varint")]
         offset: Slot,
         confirmation_count: u8,
     }
 
-    #[derive(Deserialize, Serialize)]
+    #[derive(serde_derive::Deserialize, serde_derive::Serialize)]
     struct CompactVoteStateUpdate {
         root: Slot,
         #[serde(with = "short_vec")]
@@ -900,6 +989,104 @@ pub mod serde_compact_vote_state_update {
             lockouts: lockouts.collect::<Result<_, _>>()?,
             hash,
             timestamp,
+        })
+    }
+}
+
+pub mod serde_tower_sync {
+    use {
+        super::*,
+        crate::{
+            clock::{Slot, UnixTimestamp},
+            serde_varint, short_vec,
+            vote::state::Lockout,
+        },
+        serde::{Deserialize, Deserializer, Serialize, Serializer},
+    };
+
+    #[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+    #[derive(serde_derive::Deserialize, serde_derive::Serialize)]
+    struct LockoutOffset {
+        #[serde(with = "serde_varint")]
+        offset: Slot,
+        confirmation_count: u8,
+    }
+
+    #[derive(serde_derive::Deserialize, serde_derive::Serialize)]
+    struct CompactTowerSync {
+        root: Slot,
+        #[serde(with = "short_vec")]
+        lockout_offsets: Vec<LockoutOffset>,
+        hash: Hash,
+        timestamp: Option<UnixTimestamp>,
+        block_id: Hash,
+    }
+
+    pub fn serialize<S>(tower_sync: &TowerSync, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let lockout_offsets = tower_sync.lockouts.iter().scan(
+            tower_sync.root.unwrap_or_default(),
+            |slot, lockout| {
+                let Some(offset) = lockout.slot().checked_sub(*slot) else {
+                    return Some(Err(serde::ser::Error::custom("Invalid vote lockout")));
+                };
+                let Ok(confirmation_count) = u8::try_from(lockout.confirmation_count()) else {
+                    return Some(Err(serde::ser::Error::custom("Invalid confirmation count")));
+                };
+                let lockout_offset = LockoutOffset {
+                    offset,
+                    confirmation_count,
+                };
+                *slot = lockout.slot();
+                Some(Ok(lockout_offset))
+            },
+        );
+        let compact_tower_sync = CompactTowerSync {
+            root: tower_sync.root.unwrap_or(Slot::MAX),
+            lockout_offsets: lockout_offsets.collect::<Result<_, _>>()?,
+            hash: tower_sync.hash,
+            timestamp: tower_sync.timestamp,
+            block_id: tower_sync.block_id,
+        };
+        compact_tower_sync.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<TowerSync, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let CompactTowerSync {
+            root,
+            lockout_offsets,
+            hash,
+            timestamp,
+            block_id,
+        } = CompactTowerSync::deserialize(deserializer)?;
+        let root = (root != Slot::MAX).then_some(root);
+        let lockouts =
+            lockout_offsets
+                .iter()
+                .scan(root.unwrap_or_default(), |slot, lockout_offset| {
+                    *slot = match slot.checked_add(lockout_offset.offset) {
+                        None => {
+                            return Some(Err(serde::de::Error::custom("Invalid lockout offset")))
+                        }
+                        Some(slot) => slot,
+                    };
+                    let lockout = Lockout::new_with_confirmation_count(
+                        *slot,
+                        u32::from(lockout_offset.confirmation_count),
+                    );
+                    Some(Ok(lockout))
+                });
+        Ok(TowerSync {
+            root,
+            lockouts: lockouts.collect::<Result<_, _>>()?,
+            hash,
+            timestamp,
+            block_id,
         })
     }
 }
@@ -984,7 +1171,7 @@ mod tests {
         assert_eq!(vote_state.commission_split(1), (0, 1, false));
 
         let mut vote_state = VoteState {
-            commission: std::u8::MAX,
+            commission: u8::MAX,
             ..VoteState::default()
         };
         assert_eq!(vote_state.commission_split(1), (1, 0, false));
@@ -1462,5 +1649,13 @@ mod tests {
         let vote = VoteInstruction::UpdateVoteStateSwitch(vote_state_update, hash);
         let bytes = bincode::serialize(&vote).unwrap();
         assert_eq!(vote, bincode::deserialize(&bytes).unwrap());
+    }
+
+    #[test]
+    fn test_circbuf_oob() {
+        // Craft an invalid CircBuf with out-of-bounds index
+        let data: &[u8] = &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00];
+        let circ_buf: CircBuf<()> = bincode::deserialize(data).unwrap();
+        assert_eq!(circ_buf.last(), None);
     }
 }

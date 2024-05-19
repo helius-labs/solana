@@ -9,9 +9,8 @@ use {
 };
 
 /// Reasons a transaction might be rejected.
-#[derive(
-    Error, Serialize, Deserialize, Debug, PartialEq, Eq, Clone, AbiExample, AbiEnumVisitor,
-)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample, AbiEnumVisitor))]
+#[derive(Error, Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum TransactionError {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
@@ -169,6 +168,10 @@ pub enum TransactionError {
     /// The total balance before the transaction does not equal the total balance after the transaction
     #[error("Sum of account balances before and after transaction do not match")]
     UnbalancedTransaction,
+
+    /// Program cache hit max limit.
+    #[error("Program cache hit max limit")]
+    ProgramCacheHitMaxLimit,
 }
 
 impl From<SanitizeError> for TransactionError {

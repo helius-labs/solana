@@ -60,6 +60,7 @@ fn bench_accounts_hash_bank_hash(bencher: &mut Bencher) {
     accounts.add_root(slot);
     accounts.accounts_db.flush_accounts_cache(true, Some(slot));
     bencher.iter(|| {
+<<<<<<< HEAD
         assert!(accounts.verify_accounts_hash_and_lamports(
             0,
             total_lamports,
@@ -74,6 +75,24 @@ fn bench_accounts_hash_bank_hash(bencher: &mut Bencher) {
                 use_bg_thread_pool: false,
             }
         ))
+=======
+        assert!(accounts
+            .accounts_db
+            .verify_accounts_hash_and_lamports_for_tests(
+                0,
+                total_lamports,
+                VerifyAccountsHashAndLamportsConfig {
+                    ancestors: &ancestors,
+                    test_hash_calculation: false,
+                    epoch_schedule: &EpochSchedule::default(),
+                    rent_collector: &RentCollector::default(),
+                    ignore_mismatch: false,
+                    store_detailed_debug_info: false,
+                    use_bg_thread_pool: false,
+                }
+            )
+            .is_ok())
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
     });
 }
 
@@ -124,12 +143,18 @@ fn bench_delete_dependencies(bencher: &mut Bencher) {
     });
 }
 
+<<<<<<< HEAD
 fn store_accounts_with_possible_contention<F: 'static>(
     bench_name: &str,
     bencher: &mut Bencher,
     reader_f: F,
 ) where
     F: Fn(&Accounts, &[Pubkey]) + Send + Copy,
+=======
+fn store_accounts_with_possible_contention<F>(bench_name: &str, bencher: &mut Bencher, reader_f: F)
+where
+    F: Fn(&Accounts, &[Pubkey]) + Send + Copy + 'static,
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
 {
     let num_readers = 5;
     let accounts_db = new_accounts_db(vec![PathBuf::from(
@@ -143,10 +168,20 @@ fn store_accounts_with_possible_contention<F: 'static>(
     let pubkeys: Vec<_> = std::iter::repeat_with(solana_sdk::pubkey::new_rand)
         .take(num_keys)
         .collect();
+<<<<<<< HEAD
     let accounts_data: Vec<_> = std::iter::repeat(Account {
         lamports: 1,
         ..Default::default()
     })
+=======
+    let accounts_data: Vec<_> = std::iter::repeat(
+        Account {
+            lamports: 1,
+            ..Default::default()
+        }
+        .to_account_shared_data(),
+    )
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
     .take(num_keys)
     .collect();
     let storable_accounts: Vec<_> = pubkeys.iter().zip(accounts_data.iter()).collect();

@@ -16,8 +16,8 @@ use {
     std::{
         net::UdpSocket,
         sync::{
-            atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, RwLock,
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+            Arc, Mutex, RwLock,
         },
         thread,
         time::{Duration, SystemTime},
@@ -61,6 +61,7 @@ impl rustls::server::ClientCertVerifier for SkipClientVerification {
 #[allow(clippy::field_reassign_with_default)] // https://github.com/rust-lang/rust-clippy/issues/6527
 pub(crate) fn configure_server(
     identity_keypair: &Keypair,
+    max_concurrent_connections: usize,
 ) -> Result<(ServerConfig, String), QuicServerError> {
     let (cert, priv_key) = new_dummy_x509_certificate(identity_keypair);
     let cert_chain_pem_parts = vec![Pem {
@@ -76,6 +77,7 @@ pub(crate) fn configure_server(
     server_tls_config.alpn_protocols = vec![ALPN_TPU_PROTOCOL_ID.to_vec()];
 
     let mut server_config = ServerConfig::with_crypto(Arc::new(server_tls_config));
+    server_config.concurrent_connections(max_concurrent_connections as u32);
     server_config.use_retry(true);
     let config = Arc::get_mut(&mut server_config.transport).unwrap();
 
@@ -84,11 +86,7 @@ pub(crate) fn configure_server(
         (QUIC_MAX_UNSTAKED_CONCURRENT_STREAMS.saturating_mul(2)) as u32;
     config.max_concurrent_uni_streams(MAX_CONCURRENT_UNI_STREAMS.into());
     config.stream_receive_window((PACKET_DATA_SIZE as u32).into());
-    config.receive_window(
-        (PACKET_DATA_SIZE as u32)
-            .saturating_mul(MAX_CONCURRENT_UNI_STREAMS)
-            .into(),
-    );
+    config.receive_window((PACKET_DATA_SIZE as u32).into());
     let timeout = IdleTimeout::try_from(QUIC_MAX_TIMEOUT).unwrap();
     config.max_idle_timeout(Some(timeout));
 
@@ -118,11 +116,12 @@ pub enum QuicServerError {
 
 pub struct EndpointKeyUpdater {
     endpoint: Endpoint,
+    max_concurrent_connections: usize,
 }
 
 impl NotifyKeyUpdate for EndpointKeyUpdater {
     fn update_key(&self, key: &Keypair) -> Result<(), Box<dyn std::error::Error>> {
-        let (config, _) = configure_server(key)?;
+        let (config, _) = configure_server(key, self.max_concurrent_connections)?;
         self.endpoint.set_server_config(Some(config));
         Ok(())
     }
@@ -171,14 +170,30 @@ pub struct StreamStats {
     pub(crate) connection_setup_error_locally_closed: AtomicUsize,
     pub(crate) connection_removed: AtomicUsize,
     pub(crate) connection_remove_failed: AtomicUsize,
+    pub(crate) connection_throttled_across_all: AtomicUsize,
+    pub(crate) connection_throttled_per_ipaddr: AtomicUsize,
     pub(crate) throttled_streams: AtomicUsize,
     pub(crate) stream_load_ema: AtomicUsize,
     pub(crate) stream_load_ema_overflow: AtomicUsize,
     pub(crate) stream_load_capacity_overflow: AtomicUsize,
+    pub(crate) process_sampled_packets_us_hist: Mutex<histogram::Histogram>,
+    pub(crate) perf_track_overhead_us: AtomicU64,
+    pub(crate) total_staked_packets_sent_for_batching: AtomicUsize,
+    pub(crate) total_unstaked_packets_sent_for_batching: AtomicUsize,
+    pub(crate) throttled_staked_streams: AtomicUsize,
+    pub(crate) throttled_unstaked_streams: AtomicUsize,
+    pub(crate) connection_rate_limiter_length: AtomicUsize,
 }
 
 impl StreamStats {
     pub fn report(&self, name: &'static str) {
+        let process_sampled_packets_us_hist = {
+            let mut metrics = self.process_sampled_packets_us_hist.lock().unwrap();
+            let process_sampled_packets_us_hist = metrics.clone();
+            metrics.clear();
+            process_sampled_packets_us_hist
+        };
+
         datapoint_info!(
             name,
             (
@@ -303,6 +318,18 @@ impl StreamStats {
                 i64
             ),
             (
+                "connection_throttled_across_all",
+                self.connection_throttled_across_all
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_throttled_per_ipaddr",
+                self.connection_throttled_per_ipaddr
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
                 "invalid_chunk",
                 self.total_invalid_chunks.swap(0, Ordering::Relaxed),
                 i64
@@ -326,6 +353,18 @@ impl StreamStats {
             (
                 "packets_sent_for_batching",
                 self.total_packets_sent_for_batching
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "staked_packets_sent_for_batching",
+                self.total_staked_packets_sent_for_batching
+                    .swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "unstaked_packets_sent_for_batching",
+                self.total_unstaked_packets_sent_for_batching
                     .swap(0, Ordering::Relaxed),
                 i64
             ),
@@ -425,6 +464,53 @@ impl StreamStats {
                 self.stream_load_capacity_overflow.load(Ordering::Relaxed),
                 i64
             ),
+            (
+                "throttled_unstaked_streams",
+                self.throttled_unstaked_streams.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "throttled_staked_streams",
+                self.throttled_staked_streams.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "process_sampled_packets_us_90pct",
+                process_sampled_packets_us_hist
+                    .percentile(90.0)
+                    .unwrap_or(0),
+                i64
+            ),
+            (
+                "process_sampled_packets_us_min",
+                process_sampled_packets_us_hist.minimum().unwrap_or(0),
+                i64
+            ),
+            (
+                "process_sampled_packets_us_max",
+                process_sampled_packets_us_hist.maximum().unwrap_or(0),
+                i64
+            ),
+            (
+                "process_sampled_packets_us_mean",
+                process_sampled_packets_us_hist.mean().unwrap_or(0),
+                i64
+            ),
+            (
+                "process_sampled_packets_count",
+                process_sampled_packets_us_hist.entries(),
+                i64
+            ),
+            (
+                "perf_track_overhead_us",
+                self.perf_track_overhead_us.swap(0, Ordering::Relaxed),
+                i64
+            ),
+            (
+                "connection_rate_limiter_length",
+                self.connection_rate_limiter_length.load(Ordering::Relaxed),
+                i64
+            ),
         );
     }
 }
@@ -441,11 +527,17 @@ pub fn spawn_server(
     staked_nodes: Arc<RwLock<StakedNodes>>,
     max_staked_connections: usize,
     max_unstaked_connections: usize,
+    max_streams_per_ms: u64,
+    max_connections_per_ipaddr_per_min: u64,
     wait_for_chunk_timeout: Duration,
     coalesce: Duration,
 ) -> Result<SpawnServerResult, QuicServerError> {
     let runtime = rt(format!("{thread_name}Rt"));
+<<<<<<< HEAD
     let (endpoint, _stats, task) = {
+=======
+    let result = {
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
         let _guard = runtime.enter();
         crate::nonblocking::quic::spawn_server(
             metrics_name,
@@ -457,6 +549,8 @@ pub fn spawn_server(
             staked_nodes,
             max_staked_connections,
             max_unstaked_connections,
+            max_streams_per_ms,
+            max_connections_per_ipaddr_per_min,
             wait_for_chunk_timeout,
             coalesce,
         )
@@ -464,16 +558,17 @@ pub fn spawn_server(
     let handle = thread::Builder::new()
         .name(thread_name.into())
         .spawn(move || {
-            if let Err(e) = runtime.block_on(task) {
+            if let Err(e) = runtime.block_on(result.thread) {
                 warn!("error from runtime.block_on: {:?}", e);
             }
         })
         .unwrap();
     let updater = EndpointKeyUpdater {
-        endpoint: endpoint.clone(),
+        endpoint: result.endpoint.clone(),
+        max_concurrent_connections: result.max_concurrent_connections,
     };
     Ok(SpawnServerResult {
-        endpoint,
+        endpoint: result.endpoint,
         thread: handle,
         key_updater: Arc::new(updater),
     })
@@ -483,7 +578,10 @@ pub fn spawn_server(
 mod test {
     use {
         super::*,
-        crate::nonblocking::quic::{test::*, DEFAULT_WAIT_FOR_CHUNK_TIMEOUT},
+        crate::nonblocking::quic::{
+            test::*, DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE, DEFAULT_MAX_STREAMS_PER_MS,
+            DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
+        },
         crossbeam_channel::unbounded,
         solana_sdk::net::DEFAULT_TPU_COALESCE,
         std::net::SocketAddr,
@@ -516,6 +614,8 @@ mod test {
             staked_nodes,
             MAX_STAKED_CONNECTIONS,
             MAX_UNSTAKED_CONNECTIONS,
+            DEFAULT_MAX_STREAMS_PER_MS,
+            DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE,
             DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
             DEFAULT_TPU_COALESCE,
         )
@@ -575,6 +675,8 @@ mod test {
             staked_nodes,
             MAX_STAKED_CONNECTIONS,
             MAX_UNSTAKED_CONNECTIONS,
+            DEFAULT_MAX_STREAMS_PER_MS,
+            DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE,
             DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
             DEFAULT_TPU_COALESCE,
         )
@@ -621,6 +723,8 @@ mod test {
             staked_nodes,
             MAX_STAKED_CONNECTIONS,
             0, // Do not allow any connection from unstaked clients/nodes
+            DEFAULT_MAX_STREAMS_PER_MS,
+            DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE,
             DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
             DEFAULT_TPU_COALESCE,
         )

@@ -1,5 +1,6 @@
 #![cfg_attr(RUSTC_WITH_SPECIALIZATION, feature(min_specialization))]
 #![allow(clippy::arithmetic_side_effects)]
+#![recursion_limit = "2048"]
 
 pub mod bank_forks_utils;
 pub mod bigtable_delete;
@@ -34,10 +35,18 @@ mod transaction_address_lookup_table_scanner;
 pub mod use_snapshot_archives_at_startup;
 
 #[macro_use]
+extern crate eager;
+
+#[macro_use]
 extern crate solana_metrics;
 
 #[macro_use]
 extern crate log;
 
+<<<<<<< HEAD
 #[macro_use]
+=======
+#[cfg_attr(feature = "frozen-abi", macro_use)]
+#[cfg(feature = "frozen-abi")]
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
 extern crate solana_frozen_abi_macro;

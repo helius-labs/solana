@@ -2,6 +2,15 @@
 #[cfg(not(target_env = "msvc"))]
 use jemallocator::Jemalloc;
 use {
+    agave_validator::{
+        admin_rpc_service,
+        admin_rpc_service::{load_staked_nodes_overrides, StakedNodesOverrides},
+        bootstrap,
+        cli::{self, app, warn_for_deprecated_arguments, DefaultArgs},
+        dashboard::Dashboard,
+        ledger_lockfile, lock_ledger, new_spinner_progress_bar, println_name_value,
+        redirect_stderr_to_file,
+    },
     clap::{crate_name, value_t, value_t_or_exit, values_t, values_t_or_exit, ArgMatches},
     console::style,
     crossbeam_channel::unbounded,
@@ -9,6 +18,7 @@ use {
     rand::{seq::SliceRandom, thread_rng},
     solana_accounts_db::{
         accounts_db::{AccountShrinkThreshold, AccountsDb, AccountsDbConfig, CreateAncientStorage},
+        accounts_file::StorageAccess,
         accounts_index::{
             AccountIndex, AccountSecondaryIndexes, AccountSecondaryIndexesIncludeExclude,
             AccountsIndexConfig, IndexLimitMb,
@@ -16,7 +26,7 @@ use {
         partitioned_rewards::TestPartitionedEpochRewards,
         utils::{create_all_accounts_run_and_snapshot_dirs, create_and_canonicalize_directories},
     },
-    solana_clap_utils::input_parsers::{keypair_of, keypairs_of, pubkey_of, value_of},
+    solana_clap_utils::input_parsers::{keypair_of, keypairs_of, pubkey_of, value_of, values_of},
     solana_core::{
         banking_trace::DISABLED_BAKING_TRACE_DIR,
         consensus::tower_storage,
@@ -27,7 +37,10 @@ use {
             ValidatorConfig, ValidatorStartProgress,
         },
     },
-    solana_gossip::{cluster_info::Node, legacy_contact_info::LegacyContactInfo as ContactInfo},
+    solana_gossip::{
+        cluster_info::{Node, NodeConfig},
+        contact_info::ContactInfo,
+    },
     solana_ledger::{
         blockstore_cleanup_service::{DEFAULT_MAX_LEDGER_SHREDS, DEFAULT_MIN_MAX_LEDGER_SHREDS},
         blockstore_options::{
@@ -46,6 +59,7 @@ use {
     solana_rpc_client::rpc_client::RpcClient,
     solana_rpc_client_api::config::RpcLeaderScheduleConfig,
     solana_runtime::{
+        runtime_config::RuntimeConfig,
         snapshot_bank_utils::DISABLED_SNAPSHOT_ARCHIVE_INTERVAL,
         snapshot_config::{SnapshotConfig, SnapshotUsage},
         snapshot_utils::{self, ArchiveFormat, SnapshotVersion},
@@ -60,15 +74,6 @@ use {
     solana_send_transaction_service::send_transaction_service,
     solana_streamer::socket::SocketAddrSpace,
     solana_tpu_client::tpu_client::DEFAULT_TPU_ENABLE_UDP,
-    solana_validator::{
-        admin_rpc_service,
-        admin_rpc_service::{load_staked_nodes_overrides, StakedNodesOverrides},
-        bootstrap,
-        cli::{app, warn_for_deprecated_arguments, DefaultArgs},
-        dashboard::Dashboard,
-        ledger_lockfile, lock_ledger, new_spinner_progress_bar, println_name_value,
-        redirect_stderr_to_file,
-    },
     std::{
         collections::{HashSet, VecDeque},
         env,
@@ -447,7 +452,7 @@ fn configure_banking_trace_dir_byte_limit(
     matches: &ArgMatches,
 ) {
     validator_config.banking_trace_dir_byte_limit = if matches.is_present("disable_banking_trace") {
-        // disable with an explicit flag; This effectively becomes `opt-out` by reseting to
+        // disable with an explicit flag; This effectively becomes `opt-out` by resetting to
         // DISABLED_BAKING_TRACE_DIR, while allowing us to specify a default sensible limit in clap
         // configuration for cli help.
         DISABLED_BAKING_TRACE_DIR
@@ -917,7 +922,7 @@ pub fn main() {
         let logfile = matches
             .value_of("logfile")
             .map(|s| s.into())
-            .unwrap_or_else(|| format!("solana-validator-{}.log", identity_keypair.pubkey()));
+            .unwrap_or_else(|| format!("agave-validator-{}.log", identity_keypair.pubkey()));
 
         if logfile == "-" {
             None
@@ -1082,6 +1087,8 @@ pub fn main() {
     };
 
     let tpu_connection_pool_size = value_t_or_exit!(matches, "tpu_connection_pool_size", usize);
+    let tpu_max_connections_per_ipaddr_per_minute =
+        value_t_or_exit!(matches, "tpu_max_connections_per_ipaddr_per_minute", u64);
 
     let shrink_ratio = value_t_or_exit!(matches, "accounts_shrink_ratio", f64);
     if !(0.0..=1.0).contains(&shrink_ratio) {
@@ -1230,23 +1237,60 @@ pub fn main() {
         })
         .unzip();
 
+    let read_cache_limit_bytes = values_of::<usize>(&matches, "accounts_db_read_cache_limit_mb")
+        .map(|limits| {
+            match limits.len() {
+                // we were given explicit low and high watermark values, so use them
+                2 => (limits[0] * MB, limits[1] * MB),
+                // we were given a single value, so use it for both low and high watermarks
+                1 => (limits[0] * MB, limits[0] * MB),
+                _ => {
+                    // clap will enforce either one or two values is given
+                    unreachable!(
+                        "invalid number of values given to accounts-db-read-cache-limit-mb"
+                    )
+                }
+            }
+        });
+    let create_ancient_storage = matches
+        .value_of("accounts_db_squash_storages_method")
+        .map(|method| match method {
+            "pack" => CreateAncientStorage::Pack,
+            "append" => CreateAncientStorage::Append,
+            _ => {
+                // clap will enforce one of the above values is given
+                unreachable!("invalid value given to accounts-db-squash-storages-method")
+            }
+        })
+        .unwrap_or_default();
+    let storage_access = matches
+        .value_of("accounts_db_access_storages_method")
+        .map(|method| match method {
+            "mmap" => StorageAccess::Mmap,
+            "file" => unimplemented!(),
+            _ => {
+                // clap will enforce one of the above values is given
+                unreachable!("invalid value given to accounts-db-access-storages-method")
+            }
+        })
+        .unwrap_or_default();
+
     let accounts_db_config = AccountsDbConfig {
         index: Some(accounts_index_config),
         base_working_path: Some(ledger_path.clone()),
         accounts_hash_cache_path: Some(accounts_hash_cache_path),
         shrink_paths: account_shrink_run_paths,
+        read_cache_limit_bytes,
         write_cache_limit_bytes: value_t!(matches, "accounts_db_cache_limit_mb", u64)
             .ok()
             .map(|mb| mb * MB as u64),
         ancient_append_vec_offset: value_t!(matches, "accounts_db_ancient_append_vecs", i64).ok(),
         exhaustively_verify_refcounts: matches.is_present("accounts_db_verify_refcounts"),
-        create_ancient_storage: matches
-            .is_present("accounts_db_create_ancient_storage_packed")
-            .then_some(CreateAncientStorage::Pack)
-            .unwrap_or_default(),
+        create_ancient_storage,
         test_partitioned_epoch_rewards,
         test_skip_rewrites_but_include_in_bank_hash: matches
             .is_present("accounts_db_test_skip_rewrites"),
+        storage_access,
         ..AccountsDbConfig::default()
     };
 
@@ -1330,6 +1374,13 @@ pub fn main() {
         };
 
     let full_api = matches.is_present("full_rpc_api");
+
+    let cli::thread_args::NumThreadConfig {
+        ip_echo_server_threads,
+        replay_forks_threads,
+        replay_transactions_threads,
+        tvu_receive_threads,
+    } = cli::thread_args::parse_num_threads_args(&matches);
 
     let mut validator_config = ValidatorConfig {
         require_tower: matches.is_present("require_tower"),
@@ -1464,12 +1515,16 @@ pub fn main() {
             ..RuntimeConfig::default()
         },
         staked_nodes_overrides: staked_nodes_overrides.clone(),
-        replay_slots_concurrently: matches.is_present("replay_slots_concurrently"),
         use_snapshot_archives_at_startup: value_t_or_exit!(
             matches,
             use_snapshot_archives_at_startup::cli::NAME,
             UseSnapshotArchivesAtStartup
         ),
+        ip_echo_server_threads,
+        replay_forks_threads,
+        replay_transactions_threads,
+        delay_leader_block_for_pending_fork: matches
+            .is_present("delay_leader_block_for_pending_fork"),
         ..ValidatorConfig::default()
     };
 
@@ -1836,19 +1891,21 @@ pub fn main() {
                 })
             });
 
+    let node_config = NodeConfig {
+        gossip_addr,
+        port_range: dynamic_port_range,
+        bind_ip_addr: bind_address,
+        public_tpu_addr,
+        public_tpu_forwards_addr,
+        num_tvu_sockets: tvu_receive_threads,
+    };
+
     let cluster_entrypoints = entrypoint_addrs
         .iter()
         .map(ContactInfo::new_gossip_entry_point)
         .collect::<Vec<_>>();
 
-    let mut node = Node::new_with_external_ip(
-        &identity_keypair.pubkey(),
-        &gossip_addr,
-        dynamic_port_range,
-        bind_address,
-        public_tpu_addr,
-        public_tpu_forwards_addr,
-    );
+    let mut node = Node::new_with_external_ip(&identity_keypair.pubkey(), node_config);
 
     if restricted_repair_only_mode {
         // When in --restricted_repair_only_mode is enabled only the gossip and repair ports
@@ -1939,6 +1996,7 @@ pub fn main() {
         tpu_use_quic,
         tpu_connection_pool_size,
         tpu_enable_udp,
+        tpu_max_connections_per_ipaddr_per_minute,
         admin_service_post_init,
     )
     .unwrap_or_else(|e| {

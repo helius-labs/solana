@@ -41,7 +41,8 @@ pub type EpochSlotsIndex = u8;
 pub const MAX_EPOCH_SLOTS: EpochSlotsIndex = 255;
 
 /// CrdsValue that is replicated across the cluster
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct CrdsValue {
     pub signature: Signature,
     pub data: CrdsData,
@@ -81,8 +82,10 @@ impl Signable for CrdsValue {
 /// * Merge Strategy - Latest wallclock is picked
 /// * LowestSlot index is deprecated
 #[allow(clippy::large_enum_variant)]
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample, AbiEnumVisitor)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample, AbiEnumVisitor))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum CrdsData {
+    #[allow(private_interfaces)]
     LegacyContactInfo(LegacyContactInfo),
     Vote(VoteIndex, Vote),
     LowestSlot(/*DEPRECATED:*/ u8, LowestSlot),
@@ -155,7 +158,7 @@ impl CrdsData {
         // TODO: Assign ranges to each arm proportional to their frequency in
         // the mainnet crds table.
         match kind {
-            0 => CrdsData::LegacyContactInfo(LegacyContactInfo::new_rand(rng, pubkey)),
+            0 => CrdsData::ContactInfo(ContactInfo::new_rand(rng, pubkey)),
             // Index for LowestSlot is deprecated and should be zero.
             1 => CrdsData::LowestSlot(0, LowestSlot::new_rand(rng, pubkey)),
             2 => CrdsData::LegacySnapshotHashes(LegacySnapshotHashes::new_rand(rng, pubkey)),
@@ -174,7 +177,8 @@ impl CrdsData {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct AccountsHashes {
     pub from: Pubkey,
     pub hashes: Vec<(Slot, Hash)>,
@@ -222,7 +226,8 @@ impl AccountsHashes {
 
 type LegacySnapshotHashes = AccountsHashes;
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SnapshotHashes {
     pub from: Pubkey,
     pub full: (Slot, Hash),
@@ -248,7 +253,8 @@ impl Sanitize for SnapshotHashes {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LowestSlot {
     pub from: Pubkey,
     root: Slot, //deprecated
@@ -302,7 +308,8 @@ impl Sanitize for LowestSlot {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, AbiExample, Serialize)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Vote {
     pub(crate) from: Pubkey,
     transaction: Transaction,
@@ -369,7 +376,8 @@ impl<'de> Deserialize<'de> for Vote {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct LegacyVersion {
     pub from: Pubkey,
     pub wallclock: u64,
@@ -384,7 +392,8 @@ impl Sanitize for LegacyVersion {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Version {
     pub from: Pubkey,
     pub wallclock: u64,
@@ -424,7 +433,8 @@ impl Version {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, AbiExample, Deserialize, Serialize)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct NodeInstance {
     from: Pubkey,
     wallclock: u64,
@@ -656,9 +666,9 @@ impl CrdsValue {
             CrdsData::RestartHeaviestFork(_) => CrdsValueLabel::RestartHeaviestFork(self.pubkey()),
         }
     }
-    pub fn contact_info(&self) -> Option<&LegacyContactInfo> {
+    pub(crate) fn contact_info(&self) -> Option<&ContactInfo> {
         match &self.data {
-            CrdsData::LegacyContactInfo(contact_info) => Some(contact_info),
+            CrdsData::ContactInfo(contact_info) => Some(contact_info),
             _ => None,
         }
     }
@@ -736,10 +746,10 @@ mod test {
     #[test]
     fn test_keys_and_values() {
         let mut rng = rand::thread_rng();
-        let v = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(LegacyContactInfo::default()));
+        let v = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::default()));
         assert_eq!(v.wallclock(), 0);
         let key = *v.contact_info().unwrap().pubkey();
-        assert_eq!(v.label(), CrdsValueLabel::LegacyContactInfo(key));
+        assert_eq!(v.label(), CrdsValueLabel::ContactInfo(key));
 
         let v = Vote::new(Pubkey::default(), new_test_vote_tx(&mut rng), 0).unwrap();
         let v = CrdsValue::new_unsigned(CrdsData::Vote(0, v));
@@ -793,9 +803,10 @@ mod test {
         let mut rng = rand::thread_rng();
         let keypair = Keypair::new();
         let wrong_keypair = Keypair::new();
-        let mut v = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
-            LegacyContactInfo::new_localhost(&keypair.pubkey(), timestamp()),
-        ));
+        let mut v = CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_localhost(
+            &keypair.pubkey(),
+            timestamp(),
+        )));
         verify_signatures(&mut v, &keypair, &wrong_keypair);
         let v = Vote::new(keypair.pubkey(), new_test_vote_tx(&mut rng), timestamp()).unwrap();
         let mut v = CrdsValue::new_unsigned(CrdsData::Vote(0, v));
@@ -1071,8 +1082,8 @@ mod test {
         assert_eq!(node.overrides(&other_crds), None);
         assert_eq!(other.overrides(&node_crds), None);
         // Different crds value is not a duplicate.
-        let other = LegacyContactInfo::new_rand(&mut rng, Some(pubkey));
-        let other = CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(other));
+        let other = ContactInfo::new_rand(&mut rng, Some(pubkey));
+        let other = CrdsValue::new_unsigned(CrdsData::ContactInfo(other));
         assert!(!node.check_duplicate(&other));
         assert_eq!(node.overrides(&other), None);
     }
@@ -1081,10 +1092,13 @@ mod test {
     fn test_should_force_push() {
         let mut rng = rand::thread_rng();
         let pubkey = Pubkey::new_unique();
-        assert!(!CrdsValue::new_unsigned(CrdsData::LegacyContactInfo(
-            LegacyContactInfo::new_rand(&mut rng, Some(pubkey))
-        ))
-        .should_force_push(&pubkey));
+        assert!(
+            !CrdsValue::new_unsigned(CrdsData::ContactInfo(ContactInfo::new_rand(
+                &mut rng,
+                Some(pubkey)
+            )))
+            .should_force_push(&pubkey)
+        );
         let node = CrdsValue::new_unsigned(CrdsData::NodeInstance(NodeInstance::new(
             &mut rng,
             pubkey,

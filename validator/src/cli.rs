@@ -28,7 +28,7 @@ use {
     solana_net_utils::{MINIMUM_VALIDATOR_PORT_RANGE_WIDTH, VALIDATOR_PORT_RANGE},
     solana_rayon_threadlimit::get_thread_count,
     solana_rpc::{rpc::MAX_REQUEST_BODY_SIZE, rpc_pubsub_service::PubSubConfig},
-    solana_rpc_client_api::request::MAX_MULTIPLE_ACCOUNTS,
+    solana_rpc_client_api::request::{DELINQUENT_VALIDATOR_SLOT_DISTANCE, MAX_MULTIPLE_ACCOUNTS},
     solana_runtime::{
         snapshot_bank_utils::{
             DEFAULT_FULL_SNAPSHOT_ARCHIVE_INTERVAL_SLOTS,
@@ -50,6 +50,12 @@ use {
     solana_tpu_client::tpu_client::DEFAULT_TPU_CONNECTION_POOL_SIZE,
     solana_unified_scheduler_pool::DefaultSchedulerPool,
     std::{path::PathBuf, str::FromStr},
+};
+
+pub mod thread_args;
+use {
+    solana_streamer::nonblocking::quic::DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE,
+    thread_args::{thread_args, DefaultThreadArgs},
 };
 
 const EXCLUDE_KEY: &str = "account-index-exclude-key";
@@ -230,7 +236,7 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .takes_value(false)
                 .help(
                     "Enable historical transaction info over JSON RPC, including the \
-                     'getConfirmedBlock' API.  This will cause an increase in disk usage and IOPS",
+                     'getConfirmedBlock' API. This will cause an increase in disk usage and IOPS",
                 ),
         )
         .arg(
@@ -672,7 +678,7 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .possible_values(&["none", "lz4", "snappy", "zlib"])
                 .default_value(&default_args.rocksdb_ledger_compression)
                 .help(
-                    "The compression algorithm that is used to compress transaction status data.  \
+                    "The compression algorithm that is used to compress transaction status data. \
                      Turning on compression can save ~10% of the ledger size.",
                 ),
         )
@@ -759,9 +765,9 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .hidden(hidden_unless_forced())
                 .long("no-wait-for-vote-to-start-leader")
                 .help(
-                    "If the validator starts up with no ledger, it will wait to start block
-                      production until it sees a vote land in a rooted slot. This prevents
-                      double signing. Turn off to risk double signing a block.",
+                    "If the validator starts up with no ledger, it will wait to start block \
+                     production until it sees a vote land in a rooted slot. This prevents \
+                     double signing. Turn off to risk double signing a block.",
                 ),
         )
         .arg(
@@ -838,7 +844,7 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .multiple(true)
                 .takes_value(true)
                 .help(
-                    "A list of validators to gossip with.  If specified, gossip will not \
+                    "A list of validators to gossip with. If specified, gossip will not \
                      push/pull from from validators outside this set. [default: all validators]",
                 ),
         )
@@ -877,6 +883,15 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .default_value(&default_args.tpu_connection_pool_size)
                 .validator(is_parsable::<usize>)
                 .help("Controls the TPU connection pool size per remote address"),
+        )
+        .arg(
+            Arg::with_name("tpu_max_connections_per_ipaddr_per_minute")
+                .long("tpu-max-connections-per-ipaddr-per-minute")
+                .takes_value(true)
+                .default_value(&default_args.tpu_max_connections_per_ipaddr_per_minute)
+                .validator(is_parsable::<u32>)
+                .hidden(hidden_unless_forced())
+                .help("Controls the rate of the clients connections per IpAddr per minute."),
         )
         .arg(
             Arg::with_name("staked_nodes_overrides")
@@ -987,55 +1002,6 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .long("rpc-pubsub-enable-vote-subscription")
                 .takes_value(false)
                 .help("Enable the unstable RPC PubSub `voteSubscribe` subscription"),
-        )
-        .arg(
-            Arg::with_name("rpc_pubsub_max_connections")
-                .long("rpc-pubsub-max-connections")
-                .value_name("NUMBER")
-                .takes_value(true)
-                .validator(is_parsable::<usize>)
-                .hidden(hidden_unless_forced())
-                .help(
-                    "The maximum number of connections that RPC PubSub will support. This is a \
-                     hard limit and no new connections beyond this limit can be made until an old \
-                     connection is dropped. (Obsolete)",
-                ),
-        )
-        .arg(
-            Arg::with_name("rpc_pubsub_max_fragment_size")
-                .long("rpc-pubsub-max-fragment-size")
-                .value_name("BYTES")
-                .takes_value(true)
-                .validator(is_parsable::<usize>)
-                .hidden(hidden_unless_forced())
-                .help(
-                    "The maximum length in bytes of acceptable incoming frames. Messages longer \
-                     than this will be rejected. (Obsolete)",
-                ),
-        )
-        .arg(
-            Arg::with_name("rpc_pubsub_max_in_buffer_capacity")
-                .long("rpc-pubsub-max-in-buffer-capacity")
-                .value_name("BYTES")
-                .takes_value(true)
-                .validator(is_parsable::<usize>)
-                .hidden(hidden_unless_forced())
-                .help(
-                    "The maximum size in bytes to which the incoming websocket buffer can grow. \
-                     (Obsolete)",
-                ),
-        )
-        .arg(
-            Arg::with_name("rpc_pubsub_max_out_buffer_capacity")
-                .long("rpc-pubsub-max-out-buffer-capacity")
-                .value_name("BYTES")
-                .takes_value(true)
-                .validator(is_parsable::<usize>)
-                .hidden(hidden_unless_forced())
-                .help(
-                    "The maximum size in bytes to which the outgoing websocket buffer can grow. \
-                     (Obsolete)",
-                ),
         )
         .arg(
             Arg::with_name("rpc_pubsub_max_active_subscriptions")
@@ -1324,9 +1290,21 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .conflicts_with("accounts_db_skip_shrink"),
         )
         .arg(
-            Arg::with_name("accounts_db_create_ancient_storage_packed")
-                .long("accounts-db-create-ancient-storage-packed")
-                .help("Create ancient storages in one shot instead of appending.")
+            Arg::with_name("accounts_db_squash_storages_method")
+                .long("accounts-db-squash-storages-method")
+                .value_name("METHOD")
+                .takes_value(true)
+                .possible_values(&["pack", "append"])
+                .help("Squash multiple account storage files together using this method")
+                .hidden(hidden_unless_forced()),
+        )
+        .arg(
+            Arg::with_name("accounts_db_access_storages_method")
+                .long("accounts-db-access-storages-method")
+                .value_name("METHOD")
+                .takes_value(true)
+                .possible_values(&["mmap", "file"])
+                .help("Access account storage using this method")
                 .hidden(hidden_unless_forced()),
         )
         .arg(
@@ -1351,6 +1329,25 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                     "How large the write cache for account data can become. If this is exceeded, \
                      the cache is flushed more aggressively.",
                 ),
+        )
+        .arg(
+            Arg::with_name("accounts_db_read_cache_limit_mb")
+                .long("accounts-db-read-cache-limit-mb")
+                .value_name("MAX | LOW,HIGH")
+                .takes_value(true)
+                .min_values(1)
+                .max_values(2)
+                .multiple(false)
+                .require_delimiter(true)
+                .help("How large the read cache for account data can become, in mebibytes")
+                .long_help(
+                    "How large the read cache for account data can become, in mebibytes. \
+                     If given a single value, it will be the maximum size for the cache. \
+                     If given a pair of values, they will be the low and high watermarks \
+                     for the cache. When the cache exceeds the high watermark, entries will \
+                     be evicted until the size reaches the low watermark."
+                )
+                .hidden(hidden_unless_forced()),
         )
         .arg(
             Arg::with_name("accounts_index_scan_results_limit_mb")
@@ -1467,11 +1464,6 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .help("Maximum number of bytes written to the program log before truncation"),
         )
         .arg(
-            Arg::with_name("replay_slots_concurrently")
-                .long("replay-slots-concurrently")
-                .help("Allow concurrent replay of slots on different forks"),
-        )
-        .arg(
             Arg::with_name("banking_trace_dir_byte_limit")
                 // expose friendly alternative name to cli than internal
                 // implementation-oriented one
@@ -1498,6 +1490,20 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .conflicts_with("banking_trace_dir_byte_limit")
                 .takes_value(false)
                 .help("Disables the banking trace"),
+        )
+        .arg(
+            Arg::with_name("delay_leader_block_for_pending_fork")
+                .hidden(hidden_unless_forced())
+                .long("delay-leader-block-for-pending-fork")
+                .takes_value(false)
+                .help(
+                    "Delay leader block creation while replaying a block which descends from the \
+                    current fork and has a lower slot than our next leader slot. If we don't \
+                    delay here, our new leader block will be on a different fork from the \
+                    block we are replaying and there is a high chance that the cluster will \
+                    confirm that block's fork rather than our leader block's fork because it \
+                    was created before we started creating ours.",
+                ),
         )
         .arg(
             Arg::with_name("block_verification_method")
@@ -1534,27 +1540,27 @@ pub fn app<'a>(version: &'a str, default_args: &'a DefaultArgs) -> App<'a, 'a> {
                 .required(false)
                 .conflicts_with("wait_for_supermajority")
                 .help(
-                    "When specified, the validator will enter Wen Restart mode which
-                    pauses normal activity. Validators in this mode will gossip their last
-                    vote to reach consensus on a safe restart slot and repair all blocks
-                    on the selected fork. The safe slot will be a descendant of the latest
-                    optimistically confirmed slot to ensure we do not roll back any
-                    optimistically confirmed slots.
-
-                    The progress in this mode will be saved in the file location provided.
-                    If consensus is reached, the validator will automatically exit and then
-                    execute wait_for_supermajority logic so the cluster will resume execution.
-                    The progress file will be kept around for future debugging.
-
-                    After the cluster resumes normal operation, the validator arguments can
-                    be adjusted to remove --wen_restart and update expected_shred_version to
-                    the new shred_version agreed on in the consensus.
-
-                    If wen_restart fails, refer to the progress file (in proto3 format) for
-                    further debugging.
-                ",
+                    "When specified, the validator will enter Wen Restart mode which \
+                    pauses normal activity. Validators in this mode will gossip their last \
+                    vote to reach consensus on a safe restart slot and repair all blocks \
+                    on the selected fork. The safe slot will be a descendant of the latest \
+                    optimistically confirmed slot to ensure we do not roll back any \
+                    optimistically confirmed slots. \
+                    \n\n\
+                    The progress in this mode will be saved in the file location provided. \
+                    If consensus is reached, the validator will automatically exit and then \
+                    execute wait_for_supermajority logic so the cluster will resume execution. \
+                    The progress file will be kept around for future debugging. \
+                    \n\n\
+                    After the cluster resumes normal operation, the validator arguments can \
+                    be adjusted to remove --wen_restart and update expected_shred_version to \
+                    the new shred_version agreed on in the consensus. \
+                    \n\n\
+                    If wen_restart fails, refer to the progress file (in proto3 format) for \
+                    further debugging.",
                 ),
         )
+        .args(&thread_args(&default_args.thread_args))
         .args(&get_deprecated_arguments())
         .after_help("The default subcommand is run")
         .subcommand(
@@ -2043,8 +2049,8 @@ fn deprecated_arguments() -> Vec<DeprecatedArg> {
         .help("Enable incremental snapshots")
         .long_help(
             "Enable incremental snapshots by setting this flag.  When enabled, \
-             --snapshot-interval-slots will set the incremental snapshot interval. To set the
-                 full snapshot interval, use --full-snapshot-interval-slots.",
+             --snapshot-interval-slots will set the incremental snapshot interval. To set the \
+             full snapshot interval, use --full-snapshot-interval-slots.",
         ));
     add_arg!(Arg::with_name("minimal_rpc_api")
         .long("minimal-rpc-api")
@@ -2055,8 +2061,8 @@ fn deprecated_arguments() -> Vec<DeprecatedArg> {
             .long("no-accounts-db-index-hashing")
             .help(
                 "This is obsolete. See --accounts-db-index-hashing. \
-                   Disables the use of the index in hash calculation in \
-                   AccountsHashVerifier/Accounts Background Service.",
+                 Disables the use of the index in hash calculation in \
+                 AccountsHashVerifier/Accounts Background Service.",
             ),
         usage_warning: "The accounts hash is only calculated without using the index.",
     );
@@ -2073,6 +2079,13 @@ fn deprecated_arguments() -> Vec<DeprecatedArg> {
         .long("no-rocksdb-compaction")
         .takes_value(false)
         .help("Disable manual compaction of the ledger database"));
+    add_arg!(
+        Arg::with_name("replay_slots_concurrently")
+            .long("replay-slots-concurrently")
+            .help("Allow concurrent replay of slots on different forks")
+            .conflicts_with("replay_forks_threads"),
+        replaced_by: "replay_forks_threads",
+        usage_warning: "Equivalent behavior to this flag would be --replay-forks-threads 4");
     add_arg!(Arg::with_name("rocksdb_compaction_interval")
         .long("rocksdb-compaction-interval-slots")
         .value_name("ROCKSDB_COMPACTION_INTERVAL_SLOTS")
@@ -2083,6 +2096,37 @@ fn deprecated_arguments() -> Vec<DeprecatedArg> {
         .value_name("ROCKSDB_MAX_COMPACTION_JITTER_SLOTS")
         .takes_value(true)
         .help("Introduce jitter into the compaction to offset compaction operation"));
+    add_arg!(Arg::with_name("rpc_pubsub_max_connections")
+        .long("rpc-pubsub-max-connections")
+        .value_name("NUMBER")
+        .takes_value(true)
+        .validator(is_parsable::<usize>)
+        .help(
+            "The maximum number of connections that RPC PubSub will support. This is a \
+             hard limit and no new connections beyond this limit can be made until an old \
+             connection is dropped."
+        ));
+    add_arg!(Arg::with_name("rpc_pubsub_max_fragment_size")
+        .long("rpc-pubsub-max-fragment-size")
+        .value_name("BYTES")
+        .takes_value(true)
+        .validator(is_parsable::<usize>)
+        .help(
+            "The maximum length in bytes of acceptable incoming frames. Messages longer \
+             than this will be rejected"
+        ));
+    add_arg!(Arg::with_name("rpc_pubsub_max_in_buffer_capacity")
+        .long("rpc-pubsub-max-in-buffer-capacity")
+        .value_name("BYTES")
+        .takes_value(true)
+        .validator(is_parsable::<usize>)
+        .help("The maximum size in bytes to which the incoming websocket buffer can grow."));
+    add_arg!(Arg::with_name("rpc_pubsub_max_out_buffer_capacity")
+        .long("rpc-pubsub-max-out-buffer-capacity")
+        .value_name("BYTES")
+        .takes_value(true)
+        .validator(is_parsable::<usize>)
+        .help("The maximum size in bytes to which the outgoing websocket buffer can grow."));
     add_arg!(
         Arg::with_name("skip_poh_verify")
             .long("skip-poh-verify")
@@ -2183,6 +2227,7 @@ pub struct DefaultArgs {
     pub accounts_shrink_optimize_total_space: String,
     pub accounts_shrink_ratio: String,
     pub tpu_connection_pool_size: String,
+    pub tpu_max_connections_per_ipaddr_per_minute: String,
 
     // Exit subcommand
     pub exit_min_idle_time: String,
@@ -2195,6 +2240,8 @@ pub struct DefaultArgs {
     pub banking_trace_dir_byte_limit: String,
 
     pub wen_restart_path: String,
+
+    pub thread_args: DefaultThreadArgs,
 }
 
 impl DefaultArgs {
@@ -2208,7 +2255,7 @@ impl DefaultArgs {
             maximum_local_snapshot_age: "2500".to_string(),
             genesis_archive_unpacked_size: MAX_GENESIS_ARCHIVE_UNPACKED_SIZE.to_string(),
             rpc_max_multiple_accounts: MAX_MULTIPLE_ACCOUNTS.to_string(),
-            health_check_slot_distance: "150".to_string(),
+            health_check_slot_distance: DELINQUENT_VALIDATOR_SLOT_DISTANCE.to_string(),
             tower_storage: "file".to_string(),
             etcd_domain_name: "localhost".to_string(),
             rpc_pubsub_max_active_subscriptions: PubSubConfig::default()
@@ -2270,6 +2317,8 @@ impl DefaultArgs {
                 .to_string(),
             accounts_shrink_ratio: DEFAULT_ACCOUNTS_SHRINK_RATIO.to_string(),
             tpu_connection_pool_size: DEFAULT_TPU_CONNECTION_POOL_SIZE.to_string(),
+            tpu_max_connections_per_ipaddr_per_minute:
+                DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE.to_string(),
             rpc_max_request_body_size: MAX_REQUEST_BODY_SIZE.to_string(),
             exit_min_idle_time: "10".to_string(),
             exit_max_delinquent_stake: "5".to_string(),
@@ -2277,6 +2326,7 @@ impl DefaultArgs {
             wait_for_restart_window_max_delinquent_stake: "5".to_string(),
             banking_trace_dir_byte_limit: BANKING_TRACE_DIR_DEFAULT_BYTE_LIMIT.to_string(),
             wen_restart_path: "wen_restart_progress.proto".to_string(),
+            thread_args: DefaultThreadArgs::default(),
         }
     }
 }
@@ -2355,7 +2405,7 @@ pub fn test_app<'a>(version: &'a str, default_args: &'a DefaultTestArgs) -> App<
                 .validator(is_pubkey)
                 .takes_value(true)
                 .help(
-                    "Address of the mint account that will receive tokens created at genesis.  If \
+                    "Address of the mint account that will receive tokens created at genesis. If \
                      the ledger already exists then this parameter is silently ignored \
                      [default: client keypair]",
                 ),
@@ -2431,6 +2481,13 @@ pub fn test_app<'a>(version: &'a str, default_args: &'a DefaultTestArgs) -> App<
                     "Fetch historical transaction info from a BigTable instance as a fallback to \
                      local ledger data",
                 ),
+        )
+        .arg(
+            Arg::with_name("enable_bigtable_ledger_upload")
+                .long("enable-bigtable-ledger-upload")
+                .takes_value(false)
+                .hidden(hidden_unless_forced())
+                .help("Upload new confirmed blocks into a BigTable instance"),
         )
         .arg(
             Arg::with_name("rpc_bigtable_instance")

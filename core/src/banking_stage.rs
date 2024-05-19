@@ -53,6 +53,7 @@ use {
 // Below modules are pub to allow use by banking_stage bench
 pub mod committer;
 pub mod consumer;
+pub mod forwarder;
 pub mod leader_slot_metrics;
 pub mod qos_service;
 pub mod unprocessed_packet_batches;
@@ -62,12 +63,12 @@ mod consume_worker;
 mod decision_maker;
 mod forward_packet_batches_by_accounts;
 mod forward_worker;
-mod forwarder;
 mod immutable_deserialized_packet;
 mod latest_unprocessed_votes;
 mod leader_slot_timing_metrics;
 mod multi_iterator_scanner;
 mod packet_deserializer;
+mod packet_filter;
 mod packet_receiver;
 mod read_write_account_set;
 #[allow(dead_code)]
@@ -88,7 +89,7 @@ const SLOT_BOUNDARY_CHECK_PERIOD: Duration = Duration::from_millis(10);
 #[derive(Debug, Default)]
 pub struct BankingStageStats {
     last_report: AtomicInterval,
-    id: u32,
+    id: String,
     receive_and_buffer_packets_count: AtomicUsize,
     dropped_packets_count: AtomicUsize,
     pub(crate) dropped_duplicated_packets_count: AtomicUsize,
@@ -113,7 +114,7 @@ pub struct BankingStageStats {
 impl BankingStageStats {
     pub fn new(id: u32) -> Self {
         BankingStageStats {
-            id,
+            id: id.to_string(),
             batch_packet_indexes_len: Histogram::configure()
                 .max_value(PACKETS_PER_BATCH as u64)
                 .build()
@@ -157,7 +158,7 @@ impl BankingStageStats {
         if self.last_report.should_update(report_interval_ms) {
             datapoint_info!(
                 "banking_stage-loop-stats",
-                ("id", self.id, i64),
+                "id" => self.id,
                 (
                     "receive_and_buffer_packets_count",
                     self.receive_and_buffer_packets_count
@@ -285,6 +286,10 @@ pub struct BatchedTransactionCostDetails {
     pub batched_signature_cost: u64,
     pub batched_write_lock_cost: u64,
     pub batched_data_bytes_cost: u64,
+<<<<<<< HEAD
+=======
+    pub batched_loaded_accounts_data_size_cost: u64,
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
     pub batched_programs_execute_cost: u64,
 }
 
@@ -582,6 +587,14 @@ impl BankingStage {
             )
         }
 
+        let forwarder = Forwarder::new(
+            poh_recorder.clone(),
+            bank_forks.clone(),
+            cluster_info.clone(),
+            connection_cache.clone(),
+            data_budget.clone(),
+        );
+
         // Spawn the central scheduler thread
         bank_thread_hdls.push({
             let packet_deserializer =
@@ -593,6 +606,7 @@ impl BankingStage {
                 bank_forks,
                 scheduler,
                 worker_metrics,
+                forwarder,
             );
             Builder::new()
                 .name("solBnkTxSched".to_string())
@@ -617,7 +631,7 @@ impl BankingStage {
         committer: Committer,
         transaction_recorder: TransactionRecorder,
         log_messages_bytes_limit: Option<usize>,
-        forwarder: Forwarder,
+        mut forwarder: Forwarder,
         unprocessed_transaction_storage: UnprocessedTransactionStorage,
     ) -> JoinHandle<()> {
         let mut packet_receiver = PacketReceiver::new(id, packet_receiver, bank_forks);
@@ -634,7 +648,7 @@ impl BankingStage {
                 Self::process_loop(
                     &mut packet_receiver,
                     &decision_maker,
-                    &forwarder,
+                    &mut forwarder,
                     &consumer,
                     id,
                     unprocessed_transaction_storage,
@@ -646,7 +660,7 @@ impl BankingStage {
     #[allow(clippy::too_many_arguments)]
     fn process_buffered_packets(
         decision_maker: &DecisionMaker,
-        forwarder: &Forwarder,
+        forwarder: &mut Forwarder,
         consumer: &Consumer,
         unprocessed_transaction_storage: &mut UnprocessedTransactionStorage,
         banking_stage_stats: &BankingStageStats,
@@ -715,7 +729,7 @@ impl BankingStage {
     fn process_loop(
         packet_receiver: &mut PacketReceiver,
         decision_maker: &DecisionMaker,
-        forwarder: &Forwarder,
+        forwarder: &mut Forwarder,
         consumer: &Consumer,
         id: u32,
         mut unprocessed_transaction_storage: UnprocessedTransactionStorage,
@@ -786,7 +800,7 @@ mod tests {
         crate::banking_trace::{BankingPacketBatch, BankingTracer},
         crossbeam_channel::{unbounded, Receiver},
         itertools::Itertools,
-        solana_entry::entry::{Entry, EntrySlice},
+        solana_entry::entry::{self, Entry, EntrySlice},
         solana_gossip::cluster_info::Node,
         solana_ledger::{
             blockstore::Blockstore,
@@ -814,7 +828,7 @@ mod tests {
         },
         solana_streamer::socket::SocketAddrSpace,
         solana_vote_program::{
-            vote_state::VoteStateUpdate, vote_transaction::new_vote_state_update_transaction,
+            vote_state::TowerSync, vote_transaction::new_tower_sync_transaction,
         },
         std::{
             sync::atomic::{AtomicBool, Ordering},
@@ -941,7 +955,7 @@ mod tests {
                 .collect();
             trace!("done");
             assert_eq!(entries.len(), genesis_config.ticks_per_slot as usize);
-            assert!(entries.verify(&start_hash));
+            assert!(entries.verify(&start_hash, &entry::thread_pool_for_tests()));
             assert_eq!(entries[entries.len() - 1].hash, bank.last_blockhash());
             banking_stage.join().unwrap();
         }
@@ -1060,7 +1074,7 @@ mod tests {
                     .map(|(_bank, (entry, _tick_height))| entry)
                     .collect();
 
-                assert!(entries.verify(&blockhash));
+                assert!(entries.verify(&blockhash, &entry::thread_pool_for_tests()));
                 if !entries.is_empty() {
                     blockhash = entries.last().unwrap().hash;
                     for entry in entries {
@@ -1231,7 +1245,6 @@ mod tests {
                 bank.clone(),
                 None,
                 bank.ticks_per_slot(),
-                &Pubkey::default(),
                 Arc::new(blockstore),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -1383,8 +1396,8 @@ mod tests {
             // Send a bunch of votes and transfers
             let tpu_votes = (0..100_usize)
                 .map(|i| {
-                    new_vote_state_update_transaction(
-                        VoteStateUpdate::from(vec![
+                    new_tower_sync_transaction(
+                        TowerSync::from(vec![
                             (0, 8),
                             (1, 7),
                             (i as u64 + 10, 6),
@@ -1400,12 +1413,12 @@ mod tests {
                 .collect_vec();
             let gossip_votes = (0..100_usize)
                 .map(|i| {
-                    new_vote_state_update_transaction(
-                        VoteStateUpdate::from(vec![
-                            (0, 8),
-                            (1, 7),
-                            (i as u64 + 64 + 5, 6),
-                            (i as u64 + 7, 1),
+                    new_tower_sync_transaction(
+                        TowerSync::from(vec![
+                            (0, 9),
+                            (1, 8),
+                            (i as u64 + 5, 6),
+                            (i as u64 + 63, 1),
                         ]),
                         Hash::new_unique(),
                         &keypairs[i],

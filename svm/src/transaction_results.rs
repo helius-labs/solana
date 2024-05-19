@@ -5,9 +5,9 @@
 )]
 pub use solana_sdk::inner_instruction::{InnerInstruction, InnerInstructionsList};
 use {
-    solana_program_runtime::loaded_programs::LoadedProgramsForTxBatch,
+    crate::nonce_info::{NonceFull, NonceInfo},
+    solana_program_runtime::loaded_programs::ProgramCacheForTxBatch,
     solana_sdk::{
-        nonce_info::{NonceFull, NonceInfo},
         rent_debits::RentDebits,
         transaction::{self, TransactionError},
         transaction_context::TransactionReturnData,
@@ -34,7 +34,7 @@ pub struct TransactionResults {
 pub enum TransactionExecutionResult {
     Executed {
         details: TransactionExecutionDetails,
-        programs_modified_by_tx: Box<LoadedProgramsForTxBatch>,
+        programs_modified_by_tx: Box<ProgramCacheForTxBatch>,
     },
     NotExecuted(TransactionError),
 }

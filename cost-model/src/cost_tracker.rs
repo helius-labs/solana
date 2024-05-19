@@ -48,12 +48,22 @@ impl From<CostTrackerError> for TransactionError {
     }
 }
 
-#[derive(AbiExample, Debug)]
+/// Relevant block costs that were updated after successful `try_add()`
+#[derive(Debug, Default)]
+pub struct UpdatedCosts {
+    pub updated_block_cost: u64,
+    // for all write-locked accounts `try_add()` successfully updated, the highest account cost
+    // can be useful info.
+    pub updated_costliest_account_cost: u64,
+}
+
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Debug)]
 pub struct CostTracker {
     account_cost_limit: u64,
     block_cost_limit: u64,
     vote_cost_limit: u64,
-    cost_by_writable_accounts: HashMap<Pubkey, u64>,
+    cost_by_writable_accounts: HashMap<Pubkey, u64, ahash::RandomState>,
     block_cost: u64,
     vote_cost: u64,
     transaction_count: u64,
@@ -61,6 +71,13 @@ pub struct CostTracker {
     transaction_signature_count: u64,
     secp256k1_instruction_signature_count: u64,
     ed25519_instruction_signature_count: u64,
+<<<<<<< HEAD
+=======
+    /// The number of transactions that have had their estimated cost added to
+    /// the tracker, but are still waiting for an update with actual usage or
+    /// removal if the transaction does not end up getting committed.
+    in_flight_transaction_count: usize,
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
 }
 
 impl Default for CostTracker {
@@ -75,7 +92,10 @@ impl Default for CostTracker {
             account_cost_limit: MAX_WRITABLE_ACCOUNT_UNITS,
             block_cost_limit: MAX_BLOCK_UNITS,
             vote_cost_limit: MAX_VOTE_UNITS,
-            cost_by_writable_accounts: HashMap::with_capacity(WRITABLE_ACCOUNTS_PER_BLOCK),
+            cost_by_writable_accounts: HashMap::with_capacity_and_hasher(
+                WRITABLE_ACCOUNTS_PER_BLOCK,
+                ahash::RandomState::new(),
+            ),
             block_cost: 0,
             vote_cost: 0,
             transaction_count: 0,
@@ -83,11 +103,27 @@ impl Default for CostTracker {
             transaction_signature_count: 0,
             secp256k1_instruction_signature_count: 0,
             ed25519_instruction_signature_count: 0,
+<<<<<<< HEAD
+=======
+            in_flight_transaction_count: 0,
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
         }
     }
 }
 
 impl CostTracker {
+    pub fn reset(&mut self) {
+        self.cost_by_writable_accounts.clear();
+        self.block_cost = 0;
+        self.vote_cost = 0;
+        self.transaction_count = 0;
+        self.account_data_size = 0;
+        self.transaction_signature_count = 0;
+        self.secp256k1_instruction_signature_count = 0;
+        self.ed25519_instruction_signature_count = 0;
+        self.in_flight_transaction_count = 0;
+    }
+
     /// allows to adjust limits initiated during construction
     pub fn set_limits(
         &mut self,
@@ -100,10 +136,30 @@ impl CostTracker {
         self.vote_cost_limit = vote_cost_limit;
     }
 
-    pub fn try_add(&mut self, tx_cost: &TransactionCost) -> Result<u64, CostTrackerError> {
+    pub fn in_flight_transaction_count(&self) -> usize {
+        self.in_flight_transaction_count
+    }
+
+    pub fn add_transactions_in_flight(&mut self, in_flight_transaction_count: usize) {
+        saturating_add_assign!(
+            self.in_flight_transaction_count,
+            in_flight_transaction_count
+        );
+    }
+
+    pub fn sub_transactions_in_flight(&mut self, in_flight_transaction_count: usize) {
+        self.in_flight_transaction_count = self
+            .in_flight_transaction_count
+            .saturating_sub(in_flight_transaction_count);
+    }
+
+    pub fn try_add(&mut self, tx_cost: &TransactionCost) -> Result<UpdatedCosts, CostTrackerError> {
         self.would_fit(tx_cost)?;
-        self.add_transaction_cost(tx_cost);
-        Ok(self.block_cost)
+        let updated_costliest_account_cost = self.add_transaction_cost(tx_cost);
+        Ok(UpdatedCosts {
+            updated_block_cost: self.block_cost,
+            updated_costliest_account_cost,
+        })
     }
 
     pub fn update_execution_cost(
@@ -174,6 +230,14 @@ impl CostTracker {
                 self.ed25519_instruction_signature_count,
                 i64
             ),
+<<<<<<< HEAD
+=======
+            (
+                "inflight_transaction_count",
+                self.in_flight_transaction_count,
+                i64
+            ),
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
         );
     }
 
@@ -230,8 +294,8 @@ impl CostTracker {
         Ok(())
     }
 
-    fn add_transaction_cost(&mut self, tx_cost: &TransactionCost) {
-        self.add_transaction_execution_cost(tx_cost, tx_cost.sum());
+    // Returns the highest account cost for all write-lock accounts `TransactionCost` updated
+    fn add_transaction_cost(&mut self, tx_cost: &TransactionCost) -> u64 {
         saturating_add_assign!(self.account_data_size, tx_cost.account_data_size());
         saturating_add_assign!(self.transaction_count, 1);
         saturating_add_assign!(
@@ -246,6 +310,10 @@ impl CostTracker {
             self.ed25519_instruction_signature_count,
             tx_cost.num_ed25519_instruction_signatures()
         );
+<<<<<<< HEAD
+=======
+        self.add_transaction_execution_cost(tx_cost, tx_cost.sum())
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
     }
 
     fn remove_transaction_cost(&mut self, tx_cost: &TransactionCost) {
@@ -267,18 +335,27 @@ impl CostTracker {
     }
 
     /// Apply additional actual execution units to cost_tracker
-    fn add_transaction_execution_cost(&mut self, tx_cost: &TransactionCost, adjustment: u64) {
+    /// Return the costliest account cost that were updated by `TransactionCost`
+    fn add_transaction_execution_cost(
+        &mut self,
+        tx_cost: &TransactionCost,
+        adjustment: u64,
+    ) -> u64 {
+        let mut costliest_account_cost = 0;
         for account_key in tx_cost.writable_accounts().iter() {
             let account_cost = self
                 .cost_by_writable_accounts
                 .entry(*account_key)
                 .or_insert(0);
             *account_cost = account_cost.saturating_add(adjustment);
+            costliest_account_cost = costliest_account_cost.max(*account_cost);
         }
         self.block_cost = self.block_cost.saturating_add(adjustment);
         if tx_cost.is_simple_vote() {
             self.vote_cost = self.vote_cost.saturating_add(adjustment);
         }
+
+        costliest_account_cost
     }
 
     /// Subtract extra execution units from cost_tracker
@@ -312,6 +389,7 @@ mod tests {
         crate::transaction_cost::*,
         solana_sdk::{
             hash::Hash,
+            reserved_account_keys::ReservedAccountKeys,
             signature::{Keypair, Signer},
             system_transaction,
             transaction::{
@@ -374,6 +452,7 @@ mod tests {
             MessageHash::Compute,
             Some(true),
             SimpleAddressLoader::Disabled,
+            &ReservedAccountKeys::empty_key_set(),
         )
         .unwrap();
 

@@ -17,7 +17,7 @@ use {
         solana_program::{system_instruction::SystemInstruction, system_program},
         sysvar::instructions::{BorrowedAccountMeta, BorrowedInstruction},
     },
-    std::{borrow::Cow, convert::TryFrom},
+    std::{borrow::Cow, collections::HashSet, convert::TryFrom},
     thiserror::Error,
 };
 
@@ -31,12 +31,16 @@ pub struct LegacyMessage<'a> {
 }
 
 impl<'a> LegacyMessage<'a> {
-    pub fn new(message: legacy::Message) -> Self {
+    pub fn new(message: legacy::Message, reserved_account_keys: &HashSet<Pubkey>) -> Self {
         let is_writable_account_cache = message
             .account_keys
             .iter()
             .enumerate()
-            .map(|(i, _key)| message.is_writable(i))
+            .map(|(i, _key)| {
+                message.is_writable_index(i)
+                    && !reserved_account_keys.contains(&message.account_keys[i])
+                    && !message.demote_program_id(i)
+            })
             .collect::<Vec<_>>();
         Self {
             message: Cow::Owned(message),
@@ -105,23 +109,34 @@ impl SanitizedMessage {
     pub fn try_new(
         sanitized_msg: SanitizedVersionedMessage,
         address_loader: impl AddressLoader,
+        reserved_account_keys: &HashSet<Pubkey>,
     ) -> Result<Self, SanitizeMessageError> {
         Ok(match sanitized_msg.message {
             VersionedMessage::Legacy(message) => {
-                SanitizedMessage::Legacy(LegacyMessage::new(message))
+                SanitizedMessage::Legacy(LegacyMessage::new(message, reserved_account_keys))
             }
             VersionedMessage::V0(message) => {
                 let loaded_addresses =
                     address_loader.load_addresses(&message.address_table_lookups)?;
-                SanitizedMessage::V0(v0::LoadedMessage::new(message, loaded_addresses))
+                SanitizedMessage::V0(v0::LoadedMessage::new(
+                    message,
+                    loaded_addresses,
+                    reserved_account_keys,
+                ))
             }
         })
     }
 
     /// Create a sanitized legacy message
-    pub fn try_from_legacy_message(message: legacy::Message) -> Result<Self, SanitizeMessageError> {
+    pub fn try_from_legacy_message(
+        message: legacy::Message,
+        reserved_account_keys: &HashSet<Pubkey>,
+    ) -> Result<Self, SanitizeMessageError> {
         message.sanitize()?;
-        Ok(Self::Legacy(LegacyMessage::new(message)))
+        Ok(Self::Legacy(LegacyMessage::new(
+            message,
+            reserved_account_keys,
+        )))
     }
 
     /// Return true if this message contains duplicate account keys
@@ -154,7 +169,7 @@ impl SanitizedMessage {
     pub fn fee_payer(&self) -> &Pubkey {
         self.account_keys()
             .get(0)
-            .expect("sanitized message always has non-program fee payer at index 0")
+            .expect("sanitized messages always have a fee payer at index 0")
     }
 
     /// The hash of a recent block, used for timing out a transaction
@@ -207,7 +222,14 @@ impl SanitizedMessage {
 
     /// Returns true if the account at the specified index is an input to some
     /// program instruction in this message.
-    fn is_key_passed_to_program(&self, key_index: usize) -> bool {
+    #[deprecated(since = "2.0.0", note = "Please use `is_instruction_account` instead")]
+    pub fn is_key_passed_to_program(&self, key_index: usize) -> bool {
+        self.is_instruction_account(key_index)
+    }
+
+    /// Returns true if the account at the specified index is an input to some
+    /// program instruction in this message.
+    pub fn is_instruction_account(&self, key_index: usize) -> bool {
         if let Ok(key_index) = u8::try_from(key_index) {
             self.instructions()
                 .iter()
@@ -228,8 +250,12 @@ impl SanitizedMessage {
 
     /// Returns true if the account at the specified index is not invoked as a
     /// program or, if invoked, is passed to a program.
+    #[deprecated(
+        since = "2.0.0",
+        note = "Please use `is_invoked` and `is_instruction_account` instead"
+    )]
     pub fn is_non_loader_key(&self, key_index: usize) -> bool {
-        !self.is_invoked(key_index) || self.is_key_passed_to_program(key_index)
+        !self.is_invoked(key_index) || self.is_instruction_account(key_index)
     }
 
     /// Returns true if the account at the specified index is writable by the
@@ -431,13 +457,18 @@ mod tests {
         };
 
         assert_eq!(
-            SanitizedMessage::try_from_legacy_message(legacy_message_with_no_signers).err(),
+            SanitizedMessage::try_from_legacy_message(
+                legacy_message_with_no_signers,
+                &HashSet::default(),
+            )
+            .err(),
             Some(SanitizeMessageError::IndexOutOfBounds),
         );
     }
 
     #[test]
     fn test_is_non_loader_key() {
+        #![allow(deprecated)]
         let key0 = Pubkey::new_unique();
         let key1 = Pubkey::new_unique();
         let loader_key = Pubkey::new_unique();
@@ -455,6 +486,7 @@ mod tests {
                 Hash::default(),
                 instructions,
             ),
+            &HashSet::default(),
         )
         .unwrap();
 
@@ -472,15 +504,18 @@ mod tests {
         let key4 = Pubkey::new_unique();
         let key5 = Pubkey::new_unique();
 
-        let legacy_message = SanitizedMessage::try_from_legacy_message(legacy::Message {
-            header: MessageHeader {
-                num_required_signatures: 2,
-                num_readonly_signed_accounts: 1,
-                num_readonly_unsigned_accounts: 1,
+        let legacy_message = SanitizedMessage::try_from_legacy_message(
+            legacy::Message {
+                header: MessageHeader {
+                    num_required_signatures: 2,
+                    num_readonly_signed_accounts: 1,
+                    num_readonly_unsigned_accounts: 1,
+                },
+                account_keys: vec![key0, key1, key2, key3],
+                ..legacy::Message::default()
             },
-            account_keys: vec![key0, key1, key2, key3],
-            ..legacy::Message::default()
-        })
+            &HashSet::default(),
+        )
         .unwrap();
 
         assert_eq!(legacy_message.num_readonly_accounts(), 2);
@@ -499,6 +534,7 @@ mod tests {
                 writable: vec![key4],
                 readonly: vec![key5],
             },
+            &HashSet::default(),
         ));
 
         assert_eq!(v0_message.num_readonly_accounts(), 3);
@@ -525,6 +561,7 @@ mod tests {
                 Hash::default(),
                 instructions,
             ),
+            &HashSet::default(),
         )
         .unwrap();
 
@@ -556,15 +593,18 @@ mod tests {
         let key4 = Pubkey::new_unique();
         let key5 = Pubkey::new_unique();
 
-        let legacy_message = SanitizedMessage::try_from_legacy_message(legacy::Message {
-            header: MessageHeader {
-                num_required_signatures: 2,
-                num_readonly_signed_accounts: 1,
-                num_readonly_unsigned_accounts: 1,
+        let legacy_message = SanitizedMessage::try_from_legacy_message(
+            legacy::Message {
+                header: MessageHeader {
+                    num_required_signatures: 2,
+                    num_readonly_signed_accounts: 1,
+                    num_readonly_unsigned_accounts: 1,
+                },
+                account_keys: vec![key0, key1, key2, key3],
+                ..legacy::Message::default()
             },
-            account_keys: vec![key0, key1, key2, key3],
-            ..legacy::Message::default()
-        })
+            &HashSet::default(),
+        )
         .unwrap();
         match legacy_message {
             SanitizedMessage::Legacy(message) => {
@@ -596,6 +636,7 @@ mod tests {
                 writable: vec![key4],
                 readonly: vec![key5],
             },
+            &HashSet::default(),
         ));
         match v0_message {
             SanitizedMessage::V0(message) => {
@@ -646,6 +687,10 @@ mod tests {
                     mock_secp256k1_instr,
                 ],
             ),
+<<<<<<< HEAD
+=======
+            &HashSet::new(),
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
         )
         .unwrap();
 

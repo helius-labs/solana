@@ -8,7 +8,8 @@ use {
     std::collections::HashMap,
 };
 
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 struct HashAge {
     fee_calculator: FeeCalculator,
     hash_index: u64,
@@ -16,8 +17,12 @@ struct HashAge {
 }
 
 /// Low memory overhead, so can be cloned for every checkpoint
-#[frozen_abi(digest = "8upYCMG37Awf4FGQ5kKtZARHP1QfD2GMpQCPnwCCsxhu")]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, AbiExample)]
+#[cfg_attr(
+    feature = "frozen-abi",
+    derive(AbiExample),
+    frozen_abi(digest = "8upYCMG37Awf4FGQ5kKtZARHP1QfD2GMpQCPnwCCsxhu")
+)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockhashQueue {
     /// index of last hash to be registered
     last_hash_index: u64,
@@ -58,8 +63,9 @@ impl BlockhashQueue {
     }
 
     /// Check if the age of the hash is within the queue's max age
+    #[deprecated(since = "2.0.0", note = "Please use `is_hash_valid_for_age` instead")]
     pub fn is_hash_valid(&self, hash: &Hash) -> bool {
-        self.ages.get(hash).is_some()
+        self.ages.contains_key(hash)
     }
 
     /// Check if the age of the hash is within the specified age
@@ -124,6 +130,10 @@ impl BlockhashQueue {
         })
     }
 
+    #[deprecated(
+        since = "2.0.0",
+        note = "Please use `solana_program::clock::MAX_PROCESSING_AGE`"
+    )]
     pub fn get_max_age(&self) -> usize {
         self.max_age
     }
@@ -141,28 +151,30 @@ mod tests {
     #[test]
     fn test_register_hash() {
         let last_hash = Hash::default();
-        let mut hash_queue = BlockhashQueue::new(100);
-        assert!(!hash_queue.is_hash_valid(&last_hash));
+        let max_age = 100;
+        let mut hash_queue = BlockhashQueue::new(max_age);
+        assert!(!hash_queue.is_hash_valid_for_age(&last_hash, max_age));
         hash_queue.register_hash(&last_hash, 0);
-        assert!(hash_queue.is_hash_valid(&last_hash));
+        assert!(hash_queue.is_hash_valid_for_age(&last_hash, max_age));
         assert_eq!(hash_queue.last_hash_index, 1);
     }
 
     #[test]
     fn test_reject_old_last_hash() {
-        let mut hash_queue = BlockhashQueue::new(100);
+        let max_age = 100;
+        let mut hash_queue = BlockhashQueue::new(max_age);
         let last_hash = hash(&serialize(&0).unwrap());
         for i in 0..102 {
             let last_hash = hash(&serialize(&i).unwrap());
             hash_queue.register_hash(&last_hash, 0);
         }
         // Assert we're no longer able to use the oldest hash.
-        assert!(!hash_queue.is_hash_valid(&last_hash));
+        assert!(!hash_queue.is_hash_valid_for_age(&last_hash, max_age));
         assert!(!hash_queue.is_hash_valid_for_age(&last_hash, 0));
 
         // Assert we are not able to use the oldest remaining hash.
         let last_valid_hash = hash(&serialize(&1).unwrap());
-        assert!(hash_queue.is_hash_valid(&last_valid_hash));
+        assert!(hash_queue.is_hash_valid_for_age(&last_valid_hash, max_age));
         assert!(!hash_queue.is_hash_valid_for_age(&last_valid_hash, 0));
     }
 

@@ -12,15 +12,17 @@ edition = { workspace = true }
 [dependencies]
 assert_matches = { workspace = true }
 bincode = { workspace = true }
-bitflags = { workspace = true }
+bitflags = { workspace = true, features = ["serde"] }
 byteorder = { workspace = true }
 chrono = { workspace = true, features = ["default", "serde"] }
 chrono-humanize = { workspace = true }
 crossbeam-channel = { workspace = true }
 dashmap = { workspace = true, features = ["rayon", "raw-api"] }
+eager = { workspace = true }
 fs_extra = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
+lazy-lru = { workspace = true }
 lazy_static = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
@@ -42,8 +44,8 @@ solana-accounts-db = { workspace = true }
 solana-bpf-loader-program = { workspace = true }
 solana-cost-model = { workspace = true }
 solana-entry = { workspace = true }
-solana-frozen-abi = { workspace = true }
-solana-frozen-abi-macro = { workspace = true }
+solana-frozen-abi = { workspace = true, optional = true }
+solana-frozen-abi-macro = { workspace = true, optional = true }
 solana-measure = { workspace = true }
 solana-metrics = { workspace = true }
 solana-perf = { workspace = true }
@@ -72,7 +74,7 @@ trees = { workspace = true }
 [dependencies.rocksdb]
 # Avoid the vendored bzip2 within rocksdb-sys that can cause linker conflicts
 # when also using the bzip2 crate
-version = "0.21.0"
+version = "0.22.0"
 default-features = false
 features = ["lz4"]
 
@@ -89,6 +91,11 @@ rustc_version = { workspace = true }
 
 [features]
 dev-context-only-utils = []
+frozen-abi = [
+    "dep:solana-frozen-abi",
+    "dep:solana-frozen-abi-macro",
+    "solana-runtime/frozen-abi",
+]
 
 [lib]
 crate-type = ["lib"]

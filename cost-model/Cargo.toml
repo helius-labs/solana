@@ -10,14 +10,15 @@ license = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+ahash = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
 solana-address-lookup-table-program = { workspace = true }
 solana-bpf-loader-program = { workspace = true }
 solana-compute-budget-program = { workspace = true }
 solana-config-program = { workspace = true }
-solana-frozen-abi = { workspace = true }
-solana-frozen-abi-macro = { workspace = true }
+solana-frozen-abi = { workspace = true, optional = true }
+solana-frozen-abi-macro = { workspace = true, optional = true }
 solana-loader-v4-program = { workspace = true }
 solana-metrics = { workspace = true }
 solana-program-runtime = { workspace = true }
@@ -31,6 +32,7 @@ crate-type = ["lib"]
 name = "solana_cost_model"
 
 [dev-dependencies]
+itertools = { workspace = true }
 solana-logger = { workspace = true }
 solana-sdk = { workspace = true, features = ["dev-context-only-utils"] }
 static_assertions = { workspace = true }
@@ -41,3 +43,15 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [build-dependencies]
 rustc_version = { workspace = true }
+
+[features]
+frozen-abi = [
+    "dep:solana-frozen-abi",
+    "dep:solana-frozen-abi-macro",
+    "solana-program-runtime/frozen-abi",
+    "solana-sdk/frozen-abi",
+    "solana-vote-program/frozen-abi",
+]
+
+[[bench]]
+name = "cost_tracker"

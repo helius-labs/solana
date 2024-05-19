@@ -740,7 +740,7 @@ impl Consumer {
         let fee_payer = message.fee_payer();
         let budget_limits =
             process_compute_budget_instructions(message.program_instructions_iter())?.into();
-        let fee = bank.fee_structure.calculate_fee(
+        let fee = bank.fee_structure().calculate_fee(
             message,
             bank.get_lamports_per_signature(),
             &budget_limits,
@@ -868,6 +868,7 @@ mod tests {
             nonce_account::verify_nonce_account,
             poh_config::PohConfig,
             pubkey::Pubkey,
+            reserved_account_keys::ReservedAccountKeys,
             signature::Keypair,
             signer::Signer,
             system_instruction, system_program, system_transaction,
@@ -900,7 +901,6 @@ mod tests {
             bank.clone(),
             Some((4, 4)),
             bank.ticks_per_slot(),
-            &Pubkey::new_unique(),
             Arc::new(blockstore),
             &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
             &PohConfig::default(),
@@ -1007,7 +1007,6 @@ mod tests {
             bank.clone(),
             Some((4, 4)),
             bank.ticks_per_slot(),
-            &solana_sdk::pubkey::new_rand(),
             Arc::new(blockstore),
             &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
             &PohConfig::default(),
@@ -1076,7 +1075,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &pubkey,
                 Arc::new(blockstore),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -1221,7 +1219,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &pubkey,
                 Arc::new(blockstore),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -1363,7 +1360,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &pubkey,
                 Arc::new(blockstore),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -1436,7 +1432,7 @@ mod tests {
             ..
         } = create_slow_genesis_config(10_000);
         let mut bank = Bank::new_for_tests(&genesis_config);
-        bank.ns_per_slot = std::u128::MAX;
+        bank.ns_per_slot = u128::MAX;
         if !apply_cost_tracker_during_replay_enabled {
             bank.deactivate_feature(&feature_set::apply_cost_tracker_during_replay::id());
         }
@@ -1453,7 +1449,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &pubkey,
                 Arc::new(blockstore),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -1608,7 +1603,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &pubkey,
                 Arc::new(blockstore),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -1671,7 +1665,7 @@ mod tests {
         // set cost tracker limits to MAX so it will not filter out TXs
         bank.write_cost_tracker()
             .unwrap()
-            .set_limits(std::u64::MAX, std::u64::MAX, std::u64::MAX);
+            .set_limits(u64::MAX, u64::MAX, u64::MAX);
 
         // Transfer more than the balance of the mint keypair, should cause a
         // InstructionError::InsufficientFunds that is then committed. Needs to be
@@ -1732,7 +1726,7 @@ mod tests {
         // set cost tracker limits to MAX so it will not filter out TXs
         bank.write_cost_tracker()
             .unwrap()
-            .set_limits(std::u64::MAX, std::u64::MAX, std::u64::MAX);
+            .set_limits(u64::MAX, u64::MAX, u64::MAX);
 
         // Make all repetitive transactions that conflict on the `mint_keypair`, so only 1 should be executed
         let mut transactions = vec![
@@ -1808,7 +1802,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &solana_sdk::pubkey::new_rand(),
                 Arc::new(blockstore),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -1909,7 +1902,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &pubkey,
                 blockstore.clone(),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),
@@ -2035,6 +2027,7 @@ mod tests {
             MessageHash::Compute,
             Some(false),
             bank.as_ref(),
+            &ReservedAccountKeys::empty_key_set(),
         )
         .unwrap();
 
@@ -2054,7 +2047,6 @@ mod tests {
                 bank.clone(),
                 Some((4, 4)),
                 bank.ticks_per_slot(),
-                &Pubkey::new_unique(),
                 blockstore.clone(),
                 &Arc::new(LeaderScheduleCache::new_from_bank(&bank)),
                 &PohConfig::default(),

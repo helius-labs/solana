@@ -11,6 +11,8 @@
 
 #![allow(clippy::arithmetic_side_effects)]
 
+#[allow(deprecated)]
+pub use builtins::{BUILTIN_PROGRAMS_KEYS, MAYBE_BUILTIN_KEY_OR_SYSVAR};
 use {
     crate::{
         bpf_loader, bpf_loader_deprecated, bpf_loader_upgradeable,
@@ -21,43 +23,55 @@ use {
         sanitize::{Sanitize, SanitizeError},
         short_vec, system_instruction, system_program, sysvar, wasm_bindgen,
     },
-    lazy_static::lazy_static,
-    std::{convert::TryFrom, str::FromStr},
+    std::{collections::HashSet, convert::TryFrom, str::FromStr},
 };
 
-lazy_static! {
-    // This will be deprecated and so this list shouldn't be modified
-    pub static ref BUILTIN_PROGRAMS_KEYS: [Pubkey; 10] = {
-        let parse = |s| Pubkey::from_str(s).unwrap();
-        [
-            parse("Config1111111111111111111111111111111111111"),
-            parse("Feature111111111111111111111111111111111111"),
-            parse("NativeLoader1111111111111111111111111111111"),
-            parse("Stake11111111111111111111111111111111111111"),
-            parse("StakeConfig11111111111111111111111111111111"),
-            parse("Vote111111111111111111111111111111111111111"),
-            system_program::id(),
-            bpf_loader::id(),
-            bpf_loader_deprecated::id(),
-            bpf_loader_upgradeable::id(),
-        ]
-    };
+#[deprecated(
+    since = "2.0.0",
+    note = "please use `solana_sdk::reserved_account_keys::ReservedAccountKeys` instead"
+)]
+#[allow(deprecated)]
+mod builtins {
+    use {super::*, lazy_static::lazy_static};
+
+    lazy_static! {
+        pub static ref BUILTIN_PROGRAMS_KEYS: [Pubkey; 10] = {
+            let parse = |s| Pubkey::from_str(s).unwrap();
+            [
+                parse("Config1111111111111111111111111111111111111"),
+                parse("Feature111111111111111111111111111111111111"),
+                parse("NativeLoader1111111111111111111111111111111"),
+                parse("Stake11111111111111111111111111111111111111"),
+                parse("StakeConfig11111111111111111111111111111111"),
+                parse("Vote111111111111111111111111111111111111111"),
+                system_program::id(),
+                bpf_loader::id(),
+                bpf_loader_deprecated::id(),
+                bpf_loader_upgradeable::id(),
+            ]
+        };
+    }
+
+    lazy_static! {
+        // Each element of a key is a u8. We use key[0] as an index into this table of 256 boolean
+        // elements, to store whether or not the first element of any key is present in the static
+        // lists of built-in-program keys or system ids. By using this lookup table, we can very
+        // quickly determine that a key under consideration cannot be in either of these lists (if
+        // the value is "false"), or might be in one of these lists (if the value is "true")
+        pub static ref MAYBE_BUILTIN_KEY_OR_SYSVAR: [bool; 256] = {
+            let mut temp_table: [bool; 256] = [false; 256];
+            BUILTIN_PROGRAMS_KEYS.iter().for_each(|key| temp_table[key.0[0] as usize] = true);
+            sysvar::ALL_IDS.iter().for_each(|key| temp_table[key.0[0] as usize] = true);
+            temp_table
+        };
+    }
 }
 
-lazy_static! {
-    // Each element of a key is a u8. We use key[0] as an index into this table of 256 boolean
-    // elements, to store whether or not the first element of any key is present in the static
-    // lists of built-in-program keys or system ids. By using this lookup table, we can very
-    // quickly determine that a key under consideration cannot be in either of these lists (if
-    // the value is "false"), or might be in one of these lists (if the value is "true")
-    pub static ref MAYBE_BUILTIN_KEY_OR_SYSVAR: [bool; 256] = {
-        let mut temp_table: [bool; 256] = [false; 256];
-        BUILTIN_PROGRAMS_KEYS.iter().for_each(|key| temp_table[key.0[0] as usize] = true);
-        sysvar::ALL_IDS.iter().for_each(|key| temp_table[key.0[0] as usize] = true);
-        temp_table
-    };
-}
-
+#[deprecated(
+    since = "2.0.0",
+    note = "please use `solana_sdk::reserved_account_keys::ReservedAccountKeys::is_reserved` instead"
+)]
+#[allow(deprecated)]
 pub fn is_builtin_key_or_sysvar(key: &Pubkey) -> bool {
     if MAYBE_BUILTIN_KEY_OR_SYSVAR[key.0[0] as usize] {
         return sysvar::is_sysvar_id(key) || BUILTIN_PROGRAMS_KEYS.contains(key);
@@ -104,8 +118,12 @@ fn compile_instructions(ixs: &[Instruction], keys: &[Pubkey]) -> Vec<CompiledIns
 // NOTE: Serialization-related changes must be paired with the custom serialization
 // for versioned messages in the `RemainingLegacyMessage` struct.
 #[wasm_bindgen]
-#[frozen_abi(digest = "2KnLEqfLcTBQqitE22Pp8JYkaqVVbAkGbCfdeHoyxcAU")]
-#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Eq, Clone, AbiExample)]
+#[cfg_attr(
+    feature = "frozen-abi",
+    frozen_abi(digest = "2KnLEqfLcTBQqitE22Pp8JYkaqVVbAkGbCfdeHoyxcAU"),
+    derive(AbiExample)
+)]
+#[derive(Serialize, Deserialize, Default, Debug, PartialEq, Eq, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
     /// The message header, identifying signed and read-only `account_keys`.
@@ -509,7 +527,14 @@ impl Message {
             .collect()
     }
 
+    #[deprecated(since = "2.0.0", note = "Please use `is_instruction_account` instead")]
     pub fn is_key_passed_to_program(&self, key_index: usize) -> bool {
+        self.is_instruction_account(key_index)
+    }
+
+    /// Returns true if the account at the specified index is an account input
+    /// to some program instruction in this message.
+    pub fn is_instruction_account(&self, key_index: usize) -> bool {
         if let Ok(key_index) = u8::try_from(key_index) {
             self.instructions
                 .iter()
@@ -529,8 +554,12 @@ impl Message {
         }
     }
 
+    #[deprecated(
+        since = "2.0.0",
+        note = "Please use `is_key_called_as_program` and `is_instruction_account` directly"
+    )]
     pub fn is_non_loader_key(&self, key_index: usize) -> bool {
-        !self.is_key_called_as_program(key_index) || self.is_key_passed_to_program(key_index)
+        !self.is_key_called_as_program(key_index) || self.is_instruction_account(key_index)
     }
 
     pub fn program_position(&self, index: usize) -> Option<usize> {
@@ -550,7 +579,7 @@ impl Message {
 
     /// Returns true if the account at the specified index was requested to be
     /// writable. This method should not be used directly.
-    fn is_writable_index(&self, i: usize) -> bool {
+    pub(super) fn is_writable_index(&self, i: usize) -> bool {
         i < (self.header.num_required_signatures - self.header.num_readonly_signed_accounts)
             as usize
             || (i >= self.header.num_required_signatures as usize
@@ -558,10 +587,12 @@ impl Message {
                     - self.header.num_readonly_unsigned_accounts as usize)
     }
 
-    /// Returns true if the account at the specified index should be write
-    /// locked when loaded for transaction processing in the runtime. This
-    /// method differs from `is_maybe_writable` because it is aware of the
-    /// latest reserved accounts which are not allowed to be write locked.
+    /// Returns true if the account at the specified index is writable by the
+    /// instructions in this message. Since the dynamic set of reserved accounts
+    /// isn't used here to demote write locks, this shouldn't be used in the
+    /// runtime.
+    #[deprecated(since = "2.0.0", note = "Please use `is_maybe_writable` instead")]
+    #[allow(deprecated)]
     pub fn is_writable(&self, i: usize) -> bool {
         (self.is_writable_index(i))
             && !is_builtin_key_or_sysvar(&self.account_keys[i])
@@ -569,13 +600,35 @@ impl Message {
     }
 
     /// Returns true if the account at the specified index is writable by the
-    /// instructions in this message. Since the dynamic set of reserved accounts
-    /// isn't used here to demote write locks, this shouldn't be used in the
-    /// runtime.
-    pub fn is_maybe_writable(&self, i: usize) -> bool {
+    /// instructions in this message. The `reserved_account_keys` param has been
+    /// optional to allow clients to approximate writability without requiring
+    /// fetching the latest set of reserved account keys. If this method is
+    /// called by the runtime, the latest set of reserved account keys must be
+    /// passed.
+    pub fn is_maybe_writable(
+        &self,
+        i: usize,
+        reserved_account_keys: Option<&HashSet<Pubkey>>,
+    ) -> bool {
         (self.is_writable_index(i))
-            && !is_builtin_key_or_sysvar(&self.account_keys[i])
+            && !self.is_account_maybe_reserved(i, reserved_account_keys)
             && !self.demote_program_id(i)
+    }
+
+    /// Returns true if the account at the specified index is in the optional
+    /// reserved account keys set.
+    fn is_account_maybe_reserved(
+        &self,
+        key_index: usize,
+        reserved_account_keys: Option<&HashSet<Pubkey>>,
+    ) -> bool {
+        let mut is_maybe_reserved = false;
+        if let Some(reserved_account_keys) = reserved_account_keys {
+            if let Some(key) = self.account_keys.get(key_index) {
+                is_maybe_reserved = reserved_account_keys.contains(key);
+            }
+        }
+        is_maybe_reserved
     }
 
     pub fn is_signer(&self, i: usize) -> bool {
@@ -587,7 +640,7 @@ impl Message {
         let mut writable_keys = vec![];
         let mut readonly_keys = vec![];
         for (i, key) in self.account_keys.iter().enumerate() {
-            if self.is_writable(i) {
+            if self.is_maybe_writable(i, None) {
                 writable_keys.push(key);
             } else {
                 readonly_keys.push(key);
@@ -776,6 +829,58 @@ mod tests {
     }
 
     #[test]
+    fn test_is_maybe_writable() {
+        let key0 = Pubkey::new_unique();
+        let key1 = Pubkey::new_unique();
+        let key2 = Pubkey::new_unique();
+        let key3 = Pubkey::new_unique();
+        let key4 = Pubkey::new_unique();
+        let key5 = Pubkey::new_unique();
+
+        let message = Message {
+            header: MessageHeader {
+                num_required_signatures: 3,
+                num_readonly_signed_accounts: 2,
+                num_readonly_unsigned_accounts: 1,
+            },
+            account_keys: vec![key0, key1, key2, key3, key4, key5],
+            recent_blockhash: Hash::default(),
+            instructions: vec![],
+        };
+
+        let reserved_account_keys = HashSet::from([key3]);
+
+        assert!(message.is_maybe_writable(0, Some(&reserved_account_keys)));
+        assert!(!message.is_maybe_writable(1, Some(&reserved_account_keys)));
+        assert!(!message.is_maybe_writable(2, Some(&reserved_account_keys)));
+        assert!(!message.is_maybe_writable(3, Some(&reserved_account_keys)));
+        assert!(message.is_maybe_writable(3, None));
+        assert!(message.is_maybe_writable(4, Some(&reserved_account_keys)));
+        assert!(!message.is_maybe_writable(5, Some(&reserved_account_keys)));
+        assert!(!message.is_maybe_writable(6, Some(&reserved_account_keys)));
+    }
+
+    #[test]
+    fn test_is_account_maybe_reserved() {
+        let key0 = Pubkey::new_unique();
+        let key1 = Pubkey::new_unique();
+
+        let message = Message {
+            account_keys: vec![key0, key1],
+            ..Message::default()
+        };
+
+        let reserved_account_keys = HashSet::from([key1]);
+
+        assert!(!message.is_account_maybe_reserved(0, Some(&reserved_account_keys)));
+        assert!(message.is_account_maybe_reserved(1, Some(&reserved_account_keys)));
+        assert!(!message.is_account_maybe_reserved(2, Some(&reserved_account_keys)));
+        assert!(!message.is_account_maybe_reserved(0, None));
+        assert!(!message.is_account_maybe_reserved(1, None));
+        assert!(!message.is_account_maybe_reserved(2, None));
+    }
+
+    #[test]
     fn test_get_account_keys_by_lock_type() {
         let program_id = Pubkey::default();
         let id0 = Pubkey::new_unique();
@@ -823,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_key_passed_to_program() {
+    fn test_is_instruction_account() {
         let key0 = Pubkey::new_unique();
         let key1 = Pubkey::new_unique();
         let loader2 = Pubkey::new_unique();
@@ -837,13 +942,14 @@ mod tests {
             instructions,
         );
 
-        assert!(message.is_key_passed_to_program(0));
-        assert!(message.is_key_passed_to_program(1));
-        assert!(!message.is_key_passed_to_program(2));
+        assert!(message.is_instruction_account(0));
+        assert!(message.is_instruction_account(1));
+        assert!(!message.is_instruction_account(2));
     }
 
     #[test]
     fn test_is_non_loader_key() {
+        #![allow(deprecated)]
         let key0 = Pubkey::new_unique();
         let key1 = Pubkey::new_unique();
         let loader2 = Pubkey::new_unique();

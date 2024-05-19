@@ -33,7 +33,7 @@ use {
     solana_runtime::{bank_forks::BankForks, prioritization_fee_cache::PrioritizationFeeCache},
     solana_sdk::{clock::Slot, pubkey::Pubkey, quic::NotifyKeyUpdate, signature::Keypair},
     solana_streamer::{
-        nonblocking::quic::DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
+        nonblocking::quic::{DEFAULT_MAX_STREAMS_PER_MS, DEFAULT_WAIT_FOR_CHUNK_TIMEOUT},
         quic::{spawn_server, SpawnServerResult, MAX_STAKED_CONNECTIONS, MAX_UNSTAKED_CONNECTIONS},
         streamer::StakedNodes,
     },
@@ -108,6 +108,7 @@ impl Tpu {
         banking_tracer: Arc<BankingTracer>,
         tracer_thread_hdl: TracerThread,
         tpu_enable_udp: bool,
+        tpu_max_connections_per_ipaddr_per_minute: u64,
         prioritization_fee_cache: &Arc<PrioritizationFeeCache>,
         block_production_method: BlockProductionMethod,
         _generator_config: Option<GeneratorConfig>, /* vestigial code for replay invalidator */
@@ -163,6 +164,8 @@ impl Tpu {
             staked_nodes.clone(),
             MAX_STAKED_CONNECTIONS,
             MAX_UNSTAKED_CONNECTIONS,
+            DEFAULT_MAX_STREAMS_PER_MS,
+            tpu_max_connections_per_ipaddr_per_minute,
             DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
             tpu_coalesce,
         )
@@ -183,6 +186,8 @@ impl Tpu {
             staked_nodes.clone(),
             MAX_STAKED_CONNECTIONS.saturating_add(MAX_UNSTAKED_CONNECTIONS),
             0, // Prevent unstaked nodes from forwarding transactions
+            DEFAULT_MAX_STREAMS_PER_MS,
+            tpu_max_connections_per_ipaddr_per_minute,
             DEFAULT_WAIT_FOR_CHUNK_TIMEOUT,
             tpu_coalesce,
         )

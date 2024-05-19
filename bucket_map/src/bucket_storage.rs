@@ -351,7 +351,7 @@ impl<O: BucketOccupied> BucketStorage<O> {
             &slice[..size]
         };
         let ptr = {
-            let ptr = slice.as_ptr() as *const T;
+            let ptr = slice.as_ptr().cast();
             debug_assert!(ptr as usize % std::mem::align_of::<T>() == 0);
             ptr
         };
@@ -376,7 +376,7 @@ impl<O: BucketOccupied> BucketStorage<O> {
             &mut slice[..size]
         };
         let ptr = {
-            let ptr = slice.as_mut_ptr() as *mut T;
+            let ptr = slice.as_mut_ptr().cast();
             debug_assert!(ptr as usize % std::mem::align_of::<T>() == 0);
             ptr
         };
@@ -484,7 +484,7 @@ impl<O: BucketOccupied> BucketStorage<O> {
                 let src_slice: &[u8] = &old_map[old_ix..old_ix + old_bucket.cell_size as usize];
 
                 unsafe {
-                    let dst = dst_slice.as_ptr() as *mut u8;
+                    let dst = dst_slice.as_ptr() as *mut _;
                     let src = src_slice.as_ptr();
                     std::ptr::copy_nonoverlapping(src, dst, old_bucket.cell_size as usize);
                 };
@@ -517,6 +517,7 @@ impl<O: BucketOccupied> BucketStorage<O> {
             capacity,
             max_search,
             Arc::clone(stats),
+            #[allow(clippy::map_clone)] // https://github.com/rust-lang/rust-clippy/issues/12560
             bucket
                 .map(|bucket| Arc::clone(&bucket.count))
                 .unwrap_or_default(),
@@ -604,6 +605,7 @@ mod test {
                 .read(true)
                 .write(true)
                 .create(true)
+                .truncate(true)
                 .open(path.clone())
                 .unwrap();
             _ = file.write_all(&vec![1u8; len]);

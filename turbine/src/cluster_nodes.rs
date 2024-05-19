@@ -6,7 +6,7 @@ use {
     rand_chacha::ChaChaRng,
     solana_gossip::{
         cluster_info::ClusterInfo,
-        contact_info::{LegacyContactInfo as ContactInfo, LegacyContactInfo, Protocol},
+        contact_info::{ContactInfo, Protocol},
         crds::GossipRoute,
         crds_gossip_pull::CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
         crds_value::{CrdsData, CrdsValue},
@@ -17,6 +17,7 @@ use {
     solana_sdk::{
         clock::{Epoch, Slot},
         feature_set,
+        genesis_config::ClusterType,
         native_token::LAMPORTS_PER_SOL,
         pubkey::Pubkey,
         signature::{Keypair, Signer},
@@ -29,7 +30,7 @@ use {
         collections::HashMap,
         iter::repeat_with,
         marker::PhantomData,
-        net::SocketAddr,
+        net::{IpAddr, SocketAddr},
         sync::{Arc, Mutex, RwLock},
         time::{Duration, Instant},
     },
@@ -38,6 +39,9 @@ use {
 
 const DATA_PLANE_FANOUT: usize = 200;
 pub(crate) const MAX_NUM_TURBINE_HOPS: usize = 4;
+
+// Limit number of nodes per IP address.
+const MAX_NUM_NODES_PER_IP_ADDRESS: usize = 10;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -147,8 +151,12 @@ impl<T> ClusterNodes<T> {
 }
 
 impl ClusterNodes<BroadcastStage> {
-    pub fn new(cluster_info: &ClusterInfo, stakes: &HashMap<Pubkey, u64>) -> Self {
-        new_cluster_nodes(cluster_info, stakes)
+    pub fn new(
+        cluster_info: &ClusterInfo,
+        cluster_type: ClusterType,
+        stakes: &HashMap<Pubkey, u64>,
+    ) -> Self {
+        new_cluster_nodes(cluster_info, cluster_type, stakes)
     }
 
     pub(crate) fn get_broadcast_peer(&self, shred: &ShredId) -> Option<&ContactInfo> {
@@ -272,10 +280,11 @@ impl ClusterNodes<RetransmitStage> {
 
 pub fn new_cluster_nodes<T: 'static>(
     cluster_info: &ClusterInfo,
+    cluster_type: ClusterType,
     stakes: &HashMap<Pubkey, u64>,
 ) -> ClusterNodes<T> {
     let self_pubkey = cluster_info.id();
-    let nodes = get_nodes(cluster_info, stakes);
+    let nodes = get_nodes(cluster_info, cluster_type, stakes);
     let index: HashMap<_, _> = nodes
         .iter()
         .enumerate()
@@ -298,14 +307,25 @@ pub fn new_cluster_nodes<T: 'static>(
 
 // All staked nodes + other known tvu-peers + the node itself;
 // sorted by (stake, pubkey) in descending order.
-fn get_nodes(cluster_info: &ClusterInfo, stakes: &HashMap<Pubkey, u64>) -> Vec<Node> {
+fn get_nodes(
+    cluster_info: &ClusterInfo,
+    cluster_type: ClusterType,
+    stakes: &HashMap<Pubkey, u64>,
+) -> Vec<Node> {
     let self_pubkey = cluster_info.id();
+    let should_dedup_addrs = match cluster_type {
+        ClusterType::Development => false,
+        ClusterType::Devnet | ClusterType::Testnet | ClusterType::MainnetBeta => true,
+    };
+    // Maps IP addresses to number of nodes at that IP address.
+    let mut counts = {
+        let capacity = if should_dedup_addrs { stakes.len() } else { 0 };
+        HashMap::<IpAddr, usize>::with_capacity(capacity)
+    };
     // The local node itself.
     std::iter::once({
         let stake = stakes.get(&self_pubkey).copied().unwrap_or_default();
-        let node = LegacyContactInfo::try_from(&cluster_info.my_contact_info())
-            .map(NodeId::from)
-            .expect("Operator must spin up node with valid contact-info");
+        let node = NodeId::from(cluster_info.my_contact_info());
         Node { node, stake }
     })
     // All known tvu-peers from gossip.
@@ -328,6 +348,30 @@ fn get_nodes(cluster_info: &ClusterInfo, stakes: &HashMap<Pubkey, u64>) -> Vec<N
     // Since sorted_by_key is stable, in case of duplicates, this
     // will keep nodes with contact-info.
     .dedup_by(|a, b| a.pubkey() == b.pubkey())
+    .filter_map(|node| {
+        if !should_dedup_addrs
+            || node
+                .contact_info()
+                .and_then(|node| node.tvu(Protocol::UDP).ok())
+                .map(|addr| {
+                    *counts
+                        .entry(addr.ip())
+                        .and_modify(|count| *count += 1)
+                        .or_insert(1)
+                })
+                <= Some(MAX_NUM_NODES_PER_IP_ADDRESS)
+        {
+            Some(node)
+        } else {
+            // If the node is not staked, drop it entirely. Otherwise, keep the
+            // pubkey for deterministic shuffle, but strip the contact-info so
+            // that no more packets are sent to this node.
+            (node.stake > 0u64).then(|| Node {
+                node: NodeId::from(node.pubkey()),
+                stake: node.stake,
+            })
+        }
+    })
     .collect()
 }
 
@@ -446,6 +490,7 @@ impl<T: 'static> ClusterNodesCache<T> {
         }
         let nodes = Arc::new(new_cluster_nodes::<T>(
             cluster_info,
+            root_bank.cluster_type(),
             &epoch_staked_nodes.unwrap_or_default(),
         ));
         *entry = Some((Instant::now(), Arc::clone(&nodes)));
@@ -479,7 +524,6 @@ pub fn make_test_cluster<R: Rng>(
     HashMap<Pubkey, u64>, // stakes
     ClusterInfo,
 ) {
-    use solana_gossip::contact_info::ContactInfo;
     let (unstaked_numerator, unstaked_denominator) = unstaked_ratio.unwrap_or((1, 7));
     let mut nodes: Vec<_> = repeat_with(|| {
         let pubkey = solana_sdk::pubkey::new_rand();
@@ -504,17 +548,12 @@ pub fn make_test_cluster<R: Rng>(
     // Add some staked nodes with no contact-info.
     stakes.extend(repeat_with(|| (Pubkey::new_unique(), rng.gen_range(0..20))).take(100));
     let cluster_info = ClusterInfo::new(this_node, keypair, SocketAddrSpace::Unspecified);
-    let nodes: Vec<_> = nodes
-        .iter()
-        .map(LegacyContactInfo::try_from)
-        .collect::<Result<_, _>>()
-        .unwrap();
     {
         let now = timestamp();
         let mut gossip_crds = cluster_info.gossip.crds.write().unwrap();
         // First node is pushed to crds table by ClusterInfo constructor.
         for node in nodes.iter().skip(1) {
-            let node = CrdsData::LegacyContactInfo(node.clone());
+            let node = CrdsData::ContactInfo(node.clone());
             let node = CrdsValue::new_unsigned(node);
             assert_eq!(
                 gossip_crds.insert(node, now, GossipRoute::LocalMessage),
@@ -583,7 +622,8 @@ mod tests {
         let (nodes, stakes, cluster_info) = make_test_cluster(&mut rng, 1_000, None);
         // ClusterInfo::tvu_peers excludes the node itself.
         assert_eq!(cluster_info.tvu_peers().len(), nodes.len() - 1);
-        let cluster_nodes = new_cluster_nodes::<RetransmitStage>(&cluster_info, &stakes);
+        let cluster_nodes =
+            new_cluster_nodes::<RetransmitStage>(&cluster_info, ClusterType::Development, &stakes);
         // All nodes with contact-info should be in the index.
         // Staked nodes with no contact-info should be included.
         assert!(cluster_nodes.nodes.len() > nodes.len());
@@ -618,7 +658,8 @@ mod tests {
         let (nodes, stakes, cluster_info) = make_test_cluster(&mut rng, 1_000, None);
         // ClusterInfo::tvu_peers excludes the node itself.
         assert_eq!(cluster_info.tvu_peers().len(), nodes.len() - 1);
-        let cluster_nodes = ClusterNodes::<BroadcastStage>::new(&cluster_info, &stakes);
+        let cluster_nodes =
+            ClusterNodes::<BroadcastStage>::new(&cluster_info, ClusterType::Development, &stakes);
         // All nodes with contact-info should be in the index.
         // Excluding this node itself.
         // Staked nodes with no contact-info should be included.

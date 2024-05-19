@@ -119,7 +119,7 @@ fn bench_program_alu(bencher: &mut Bencher) {
     with_mock_invoke_context!(invoke_context, bpf_loader::id(), 10000001);
 
     let program_runtime_environment = create_program_runtime_environment_v1(
-        &invoke_context.feature_set,
+        invoke_context.get_feature_set(),
         &ComputeBudget::default(),
         true,
         false,
@@ -142,7 +142,7 @@ fn bench_program_alu(bencher: &mut Bencher) {
 
     println!("Interpreted:");
     vm.context_object_pointer
-        .mock_set_remaining(std::i64::MAX as u64);
+        .mock_set_remaining(i64::MAX as u64);
     let (instructions, result) = vm.execute_program(&executable, true);
     assert_eq!(SUCCESS, result.unwrap());
     assert_eq!(ARMSTRONG_LIMIT, LittleEndian::read_u64(&inner_iter));
@@ -153,7 +153,7 @@ fn bench_program_alu(bencher: &mut Bencher) {
 
     bencher.iter(|| {
         vm.context_object_pointer
-            .mock_set_remaining(std::i64::MAX as u64);
+            .mock_set_remaining(i64::MAX as u64);
         vm.execute_program(&executable, true).1.unwrap();
     });
     let summary = bencher.bench(|_bencher| Ok(())).unwrap().unwrap();
@@ -174,7 +174,7 @@ fn bench_program_alu(bencher: &mut Bencher) {
 
     bencher.iter(|| {
         vm.context_object_pointer
-            .mock_set_remaining(std::i64::MAX as u64);
+            .mock_set_remaining(i64::MAX as u64);
         vm.execute_program(&executable, false).1.unwrap();
     });
     let summary = bencher.bench(|_bencher| Ok(())).unwrap().unwrap();
@@ -235,10 +235,10 @@ fn bench_create_vm(bencher: &mut Bencher) {
     invoke_context.mock_set_remaining(BUDGET);
 
     let direct_mapping = invoke_context
-        .feature_set
+        .get_feature_set()
         .is_active(&bpf_account_data_direct_mapping::id());
     let program_runtime_environment = create_program_runtime_environment_v1(
-        &invoke_context.feature_set,
+        invoke_context.get_feature_set(),
         &ComputeBudget::default(),
         true,
         false,
@@ -280,7 +280,7 @@ fn bench_instruction_count_tuner(_bencher: &mut Bencher) {
     invoke_context.mock_set_remaining(BUDGET);
 
     let direct_mapping = invoke_context
-        .feature_set
+        .get_feature_set()
         .is_active(&bpf_account_data_direct_mapping::id());
 
     // Serialize account data
@@ -295,7 +295,7 @@ fn bench_instruction_count_tuner(_bencher: &mut Bencher) {
     .unwrap();
 
     let program_runtime_environment = create_program_runtime_environment_v1(
-        &invoke_context.feature_set,
+        invoke_context.get_feature_set(),
         &ComputeBudget::default(),
         true,
         false,

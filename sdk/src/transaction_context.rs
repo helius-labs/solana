@@ -1,7 +1,7 @@
 //! Data shared between program runtime and built-in programs as well as SBF programs.
 #![deny(clippy::indexing_slicing)]
 
-#[cfg(all(not(target_os = "solana"), debug_assertions))]
+#[cfg(all(not(target_os = "solana"), feature = "full", debug_assertions))]
 use crate::signature::Signature;
 #[cfg(not(target_os = "solana"))]
 use {
@@ -145,7 +145,7 @@ pub struct TransactionContext {
     #[cfg(not(target_os = "solana"))]
     rent: Rent,
     /// Useful for debugging to filter by or to look it up on the explorer
-    #[cfg(all(not(target_os = "solana"), debug_assertions))]
+    #[cfg(all(not(target_os = "solana"), feature = "full", debug_assertions))]
     signature: Signature,
 }
 
@@ -172,7 +172,7 @@ impl TransactionContext {
             return_data: TransactionReturnData::default(),
             accounts_resize_delta: RefCell::new(0),
             rent,
-            #[cfg(all(not(target_os = "solana"), debug_assertions))]
+            #[cfg(all(not(target_os = "solana"), feature = "full", debug_assertions))]
             signature: Signature::default(),
         }
     }
@@ -195,13 +195,13 @@ impl TransactionContext {
     }
 
     /// Stores the signature of the current transaction
-    #[cfg(all(not(target_os = "solana"), debug_assertions))]
+    #[cfg(all(not(target_os = "solana"), feature = "full", debug_assertions))]
     pub fn set_signature(&mut self, signature: &Signature) {
         self.signature = *signature;
     }
 
     /// Returns the signature of the current transaction
-    #[cfg(all(not(target_os = "solana"), debug_assertions))]
+    #[cfg(all(not(target_os = "solana"), feature = "full", debug_assertions))]
     pub fn get_signature(&self) -> &Signature {
         &self.signature
     }
@@ -869,6 +869,7 @@ impl<'a> BorrowedAccount<'a> {
         self.can_data_be_changed()?;
         self.touch()?;
         self.update_accounts_resize_delta(data.len())?;
+<<<<<<< HEAD
         // Calling make_data_mut() here guarantees that set_data_from_slice()
         // copies in places, extending the account capacity if necessary but
         // never reducing it. This is required as the account migh be directly
@@ -876,6 +877,12 @@ impl<'a> BorrowedAccount<'a> {
         // leave a hole in the vm address space. After CPI or upon program
         // termination, the runtime will zero the extra capacity.
         self.make_data_mut();
+=======
+        // Note that we intentionally don't call self.make_data_mut() here.  make_data_mut() will
+        // allocate + memcpy the current data if self.account is shared. We don't need the memcpy
+        // here tho because account.set_data_from_slice(data) is going to replace the content
+        // anyway.
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
         self.account.set_data_from_slice(data);
 
         Ok(())

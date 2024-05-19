@@ -5,7 +5,8 @@ use {
         ic_logger_msg,
         invoke_context::InvokeContext,
         loaded_programs::{
-            LoadProgramMetrics, LoadedProgram, LoadedProgramType, DELAY_VISIBILITY_SLOT_OFFSET,
+            LoadProgramMetrics, ProgramCacheEntry, ProgramCacheEntryType,
+            DELAY_VISIBILITY_SLOT_OFFSET,
         },
         log_collector::LogCollector,
         stable_log,
@@ -145,8 +146,12 @@ fn execute<'a, 'b: 'a>(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // We dropped the lifetime tracking in the Executor by setting it to 'static,
     // thus we need to reintroduce the correct lifetime of InvokeContext here again.
-    let executable =
-        unsafe { std::mem::transmute::<_, &'a Executable<InvokeContext<'b>>>(executable) };
+    let executable = unsafe {
+        std::mem::transmute::<
+            &'a Executable<InvokeContext<'static>>,
+            &'a Executable<InvokeContext<'b>>,
+        >(executable)
+    };
     let log_collector = invoke_context.get_log_collector();
     let stack_height = invoke_context.get_stack_height();
     let transaction_context = &invoke_context.transaction_context;
@@ -405,17 +410,21 @@ pub fn process_instruction_deploy(
     let deployment_slot = state.slot;
     let effective_slot = deployment_slot.saturating_add(DELAY_VISIBILITY_SLOT_OFFSET);
 
+    let environments = invoke_context
+        .get_environments_for_slot(effective_slot)
+        .map_err(|err| {
+            // This will never fail since the epoch schedule is already configured.
+            ic_logger_msg!(log_collector, "Failed to get runtime environment {}", err);
+            InstructionError::InvalidArgument
+        })?;
+
     let mut load_program_metrics = LoadProgramMetrics {
         program_id: buffer.get_key().to_string(),
         ..LoadProgramMetrics::default()
     };
-    let executor = LoadedProgram::new(
+    let executor = ProgramCacheEntry::new(
         &loader_v4::id(),
-        invoke_context
-            .programs_modified_by_tx
-            .environments
-            .program_runtime_v2
-            .clone(),
+        environments.program_runtime_v2.clone(),
         deployment_slot,
         effective_slot,
         programdata,
@@ -598,13 +607,13 @@ pub fn process_instruction_inner(
             .ix_usage_counter
             .fetch_add(1, Ordering::Relaxed);
         match &loaded_program.program {
-            LoadedProgramType::FailedVerification(_)
-            | LoadedProgramType::Closed
-            | LoadedProgramType::DelayVisibility => {
+            ProgramCacheEntryType::FailedVerification(_)
+            | ProgramCacheEntryType::Closed
+            | ProgramCacheEntryType::DelayVisibility => {
                 ic_logger_msg!(log_collector, "Program is not deployed");
                 Err(Box::new(InstructionError::InvalidAccountData) as Box<dyn std::error::Error>)
             }
-            LoadedProgramType::Typed(executable) => execute(invoke_context, executable),
+            ProgramCacheEntryType::Loaded(executable) => execute(invoke_context, executable),
             _ => Err(Box::new(InstructionError::IncorrectProgramId) as Box<dyn std::error::Error>),
         }
     }
@@ -649,7 +658,7 @@ mod tests {
                 if let Some(programdata) =
                     account.data().get(LoaderV4State::program_data_offset()..)
                 {
-                    if let Ok(loaded_program) = LoadedProgram::new(
+                    if let Ok(loaded_program) = ProgramCacheEntry::new(
                         &loader_v4::id(),
                         invoke_context
                             .programs_modified_by_tx

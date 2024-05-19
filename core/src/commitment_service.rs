@@ -492,7 +492,7 @@ mod tests {
                 expected.increase_confirmation_stake(1, 50);
                 assert_eq!(*commitment.get(&a).unwrap(), expected);
             } else {
-                assert!(commitment.get(&a).is_none());
+                assert!(!commitment.contains_key(&a));
             }
         }
         assert_eq!(rooted_stake.len(), 2);
@@ -555,7 +555,8 @@ mod tests {
             bank_forks
                 .write()
                 .unwrap()
-                .set_root(x, &AbsRequestSender::default(), None);
+                .set_root(x, &AbsRequestSender::default(), None)
+                .unwrap();
         }
 
         // Add an additional bank/vote that will root slot 2
@@ -596,11 +597,15 @@ mod tests {
             .read()
             .unwrap()
             .highest_super_majority_root();
-        bank_forks.write().unwrap().set_root(
-            root,
-            &AbsRequestSender::default(),
-            Some(highest_super_majority_root),
-        );
+        bank_forks
+            .write()
+            .unwrap()
+            .set_root(
+                root,
+                &AbsRequestSender::default(),
+                Some(highest_super_majority_root),
+            )
+            .unwrap();
         let highest_super_majority_root_bank =
             bank_forks.read().unwrap().get(highest_super_majority_root);
         assert!(highest_super_majority_root_bank.is_some());
@@ -675,11 +680,15 @@ mod tests {
             .read()
             .unwrap()
             .highest_super_majority_root();
-        bank_forks.write().unwrap().set_root(
-            root,
-            &AbsRequestSender::default(),
-            Some(highest_super_majority_root),
-        );
+        bank_forks
+            .write()
+            .unwrap()
+            .set_root(
+                root,
+                &AbsRequestSender::default(),
+                Some(highest_super_majority_root),
+            )
+            .unwrap();
         let highest_super_majority_root_bank =
             bank_forks.read().unwrap().get(highest_super_majority_root);
         assert!(highest_super_majority_root_bank.is_some());

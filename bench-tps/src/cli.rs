@@ -11,6 +11,7 @@ use {
         pubkey::Pubkey,
         signature::{read_keypair_file, Keypair},
     },
+    solana_streamer::nonblocking::quic::DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE,
     solana_tpu_client::tpu_client::{DEFAULT_TPU_CONNECTION_POOL_SIZE, DEFAULT_TPU_USE_QUIC},
     std::{
         net::{IpAddr, Ipv4Addr},
@@ -68,6 +69,7 @@ pub struct Config {
     pub external_client_type: ExternalClientType,
     pub use_quic: bool,
     pub tpu_connection_pool_size: usize,
+    pub tpu_max_connections_per_ipaddr_per_minute: u64,
     pub compute_unit_price: Option<ComputeUnitPrice>,
     pub skip_tx_account_data_size: bool,
     pub use_durable_nonce: bool,
@@ -76,6 +78,8 @@ pub struct Config {
     pub bind_address: IpAddr,
     pub client_node_id: Option<Keypair>,
     pub commitment_config: CommitmentConfig,
+    pub block_data_file: Option<String>,
+    pub transaction_data_file: Option<String>,
 }
 
 impl Eq for Config {}
@@ -87,7 +91,7 @@ impl Default for Config {
             websocket_url: ConfigInput::default().websocket_url,
             id: Keypair::new(),
             threads: 4,
-            duration: Duration::new(std::u64::MAX, 0),
+            duration: Duration::new(u64::MAX, 0),
             tx_count: 50_000,
             keypair_multiplier: 8,
             thread_batch_sleep_ms: 1000,
@@ -101,6 +105,8 @@ impl Default for Config {
             external_client_type: ExternalClientType::default(),
             use_quic: DEFAULT_TPU_USE_QUIC,
             tpu_connection_pool_size: DEFAULT_TPU_CONNECTION_POOL_SIZE,
+            tpu_max_connections_per_ipaddr_per_minute:
+                DEFAULT_MAX_CONNECTIONS_PER_IPADDR_PER_MINUTE,
             compute_unit_price: None,
             skip_tx_account_data_size: false,
             use_durable_nonce: false,
@@ -109,6 +115,8 @@ impl Default for Config {
             bind_address: IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
             client_node_id: None,
             commitment_config: CommitmentConfig::confirmed(),
+            block_data_file: None,
+            transaction_data_file: None,
         }
     }
 }
@@ -419,6 +427,23 @@ pub fn build_args<'a>(version: &'_ str) -> App<'a, '_> {
                 .default_value("confirmed")
                 .help("Block commitment config for getting latest blockhash"),
         )
+        .arg(
+            Arg::with_name("block_data_file")
+                .long("block-data-file")
+                .value_name("FILENAME")
+                .takes_value(true)
+                .help("File to save block statistics relevant to the submitted transactions."),
+        )
+        .arg(
+            Arg::with_name("transaction_data_file")
+                .long("transaction-data-file")
+                .value_name("FILENAME")
+                .takes_value(true)
+                .help(
+                    "File to save details about all the submitted transactions.\
+                    This option is useful for debug purposes."
+                ),
+        )
 }
 
 /// Parses a clap `ArgMatches` structure into a `Config`
@@ -587,6 +612,10 @@ pub fn parse_args(matches: &ArgMatches) -> Result<Config, &'static str> {
     }
 
     args.commitment_config = value_t_or_exit!(matches, "commitment_config", CommitmentConfig);
+    args.block_data_file = matches.value_of("block_data_file").map(|s| s.to_string());
+    args.transaction_data_file = matches
+        .value_of("transaction_data_file")
+        .map(|s| s.to_string());
 
     Ok(args)
 }

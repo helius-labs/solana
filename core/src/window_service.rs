@@ -159,27 +159,39 @@ fn run_check_duplicate(
             root_bank = bank_forks.read().unwrap().root_bank();
         }
         let shred_slot = shred.slot();
-        let send_index_and_erasure_conflicts = cluster_nodes::check_feature_activation(
-            &feature_set::index_erasure_conflict_duplicate_proofs::id(),
-            shred_slot,
-            &root_bank,
-        );
         let merkle_conflict_duplicate_proofs = cluster_nodes::check_feature_activation(
             &feature_set::merkle_conflict_duplicate_proofs::id(),
             shred_slot,
             &root_bank,
         );
+        let chained_merkle_conflict_duplicate_proofs = cluster_nodes::check_feature_activation(
+            &feature_set::chained_merkle_conflict_duplicate_proofs::id(),
+            shred_slot,
+            &root_bank,
+        );
         let (shred1, shred2) = match shred {
             PossibleDuplicateShred::LastIndexConflict(shred, conflict)
-            | PossibleDuplicateShred::ErasureConflict(shred, conflict) => {
-                if send_index_and_erasure_conflicts {
+            | PossibleDuplicateShred::ErasureConflict(shred, conflict) => (shred, conflict),
+            PossibleDuplicateShred::MerkleRootConflict(shred, conflict) => {
+                if merkle_conflict_duplicate_proofs {
+                    // Although this proof can be immediately stored on detection, we wait until
+                    // here in order to check the feature flag, as storage in blockstore can
+                    // preclude the detection of other duplicate proofs in this slot
+                    if blockstore.has_duplicate_shreds_in_slot(shred_slot) {
+                        return Ok(());
+                    }
+                    blockstore.store_duplicate_slot(
+                        shred_slot,
+                        conflict.clone(),
+                        shred.clone().into_payload(),
+                    )?;
                     (shred, conflict)
                 } else {
                     return Ok(());
                 }
             }
-            PossibleDuplicateShred::MerkleRootConflict(shred, conflict) => {
-                if merkle_conflict_duplicate_proofs {
+            PossibleDuplicateShred::ChainedMerkleRootConflict(shred, conflict) => {
+                if chained_merkle_conflict_duplicate_proofs {
                     // Although this proof can be immediately stored on detection, we wait until
                     // here in order to check the feature flag, as storage in blockstore can
                     // preclude the detection of other duplicate proofs in this slot
@@ -286,7 +298,7 @@ fn run_insert<F>(
     handle_duplicate: F,
     metrics: &mut BlockstoreInsertionMetrics,
     ws_metrics: &mut WindowServiceMetrics,
-    completed_data_sets_sender: &CompletedDataSetsSender,
+    completed_data_sets_sender: Option<&CompletedDataSetsSender>,
     retransmit_sender: &Sender<Vec<ShredPayload>>,
     outstanding_requests: &RwLock<OutstandingShredRepairs>,
     reed_solomon_cache: &ReedSolomonCache,
@@ -361,7 +373,10 @@ where
         metrics,
     )?;
 
-    completed_data_sets_sender.try_send(completed_data_sets)?;
+    if let Some(sender) = completed_data_sets_sender {
+        sender.try_send(completed_data_sets)?;
+    }
+
     Ok(())
 }
 
@@ -389,7 +404,7 @@ impl WindowService {
         repair_info: RepairInfo,
         leader_schedule_cache: Arc<LeaderScheduleCache>,
         verified_vote_receiver: VerifiedVoteReceiver,
-        completed_data_sets_sender: CompletedDataSetsSender,
+        completed_data_sets_sender: Option<CompletedDataSetsSender>,
         duplicate_slots_sender: DuplicateSlotSender,
         ancestor_hashes_replay_update_receiver: AncestorHashesReplayUpdateReceiver,
         dumped_slots_receiver: DumpedSlotsReceiver,
@@ -485,7 +500,7 @@ impl WindowService {
         leader_schedule_cache: Arc<LeaderScheduleCache>,
         verified_receiver: Receiver<Vec<PacketBatch>>,
         check_duplicate_sender: Sender<PossibleDuplicateShred>,
-        completed_data_sets_sender: CompletedDataSetsSender,
+        completed_data_sets_sender: Option<CompletedDataSetsSender>,
         retransmit_sender: Sender<Vec<ShredPayload>>,
         outstanding_requests: Arc<RwLock<OutstandingShredRepairs>>,
         accept_repairs_only: bool,
@@ -517,7 +532,7 @@ impl WindowService {
                         handle_duplicate,
                         &mut metrics,
                         &mut ws_metrics,
-                        &completed_data_sets_sender,
+                        completed_data_sets_sender.as_ref(),
                         &retransmit_sender,
                         &outstanding_requests,
                         &reed_solomon_cache,
@@ -569,6 +584,7 @@ mod test {
     use {
         super::*,
         crate::repair::serve_repair::ShredRepairType,
+        rand::Rng,
         solana_entry::entry::{create_ticks, Entry},
         solana_gossip::contact_info::ContactInfo,
         solana_ledger::{
@@ -597,7 +613,8 @@ mod test {
             keypair,
             entries,
             true, // is_last_in_slot
-            None, // chained_merkle_root
+            // chained_merkle_root
+            Some(Hash::new_from_array(rand::thread_rng().gen())),
             0,    // next_shred_index
             0,    // next_code_index
             true, // merkle_variant

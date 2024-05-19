@@ -21,8 +21,12 @@ use {
     },
     solana_runtime::bank::Bank,
     solana_sdk::{
-        account::Account, feature_set::apply_cost_tracker_during_replay, signature::Keypair,
-        signer::Signer, stake_history::Epoch, system_program, system_transaction,
+        account::{Account, ReadableAccount},
+        feature_set::apply_cost_tracker_during_replay,
+        signature::Keypair,
+        signer::Signer,
+        stake_history::Epoch,
+        system_program, system_transaction,
         transaction::SanitizedTransaction,
     },
     std::sync::{
@@ -55,7 +59,8 @@ fn create_funded_accounts(bank: &Bank, num: usize) -> Vec<Keypair> {
                 owner: system_program::id(),
                 executable: false,
                 rent_epoch: Epoch::MAX,
-            },
+            }
+            .to_account_shared_data(),
         );
     });
 
@@ -114,7 +119,7 @@ fn setup(apply_cost_tracker_during_replay: bool) -> BenchFrame {
     // set cost tracker limits to MAX so it will not filter out TXs
     bank.write_cost_tracker()
         .unwrap()
-        .set_limits(std::u64::MAX, std::u64::MAX, std::u64::MAX);
+        .set_limits(u64::MAX, u64::MAX, u64::MAX);
     let bank = bank.wrap_with_bank_forks_for_tests().0;
 
     let ledger_path = TempDir::new().unwrap();

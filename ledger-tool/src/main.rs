@@ -17,7 +17,7 @@ use {
     },
     dashmap::DashMap,
     log::*,
-    serde::Serialize,
+    serde_derive::Serialize,
     solana_account_decoder::UiAccountEncoding,
     solana_accounts_db::{
         accounts_db::CalcAccountsHashDataSource, accounts_index::ScanConfig,
@@ -28,8 +28,7 @@ use {
         input_parsers::{cluster_type_of, pubkey_of, pubkeys_of},
         input_validators::{
             is_parsable, is_pow2, is_pubkey, is_pubkey_or_keypair, is_slot, is_valid_percentage,
-            is_within_range, validate_maximum_full_snapshot_archives_to_retain,
-            validate_maximum_incremental_snapshot_archives_to_retain,
+            is_within_range,
         },
     },
     solana_cli_output::OutputFormat,
@@ -67,6 +66,7 @@ use {
         native_token::{lamports_to_sol, sol_to_lamports, Sol},
         pubkey::Pubkey,
         rent::Rent,
+        reserved_account_keys::ReservedAccountKeys,
         shred_version::compute_shred_version,
         stake::{self, state::StakeStateV2},
         system_program,
@@ -83,7 +83,6 @@ use {
         ffi::OsStr,
         fs::File,
         io::{self, Write},
-        num::NonZeroUsize,
         path::{Path, PathBuf},
         process::{exit, Command, Stdio},
         str::FromStr,
@@ -171,7 +170,7 @@ impl Default for GraphVoteAccountMode {
     }
 }
 
-struct GraphVoteAccountModeError(String);
+struct GraphVoteAccountModeError;
 
 impl FromStr for GraphVoteAccountMode {
     type Err = GraphVoteAccountModeError;
@@ -180,7 +179,7 @@ impl FromStr for GraphVoteAccountMode {
             Self::DISABLED => Ok(Self::Disabled),
             Self::LAST_ONLY => Ok(Self::LastOnly),
             Self::WITH_HISTORY => Ok(Self::WithHistory),
-            _ => Err(GraphVoteAccountModeError(s.to_string())),
+            _ => Err(GraphVoteAccountModeError),
         }
     }
 }
@@ -335,7 +334,7 @@ fn graph_forks(bank_forks: &BankForks, config: &GraphConfig) -> String {
     // while collecting information about the absent votes and stakes
     let mut absent_stake = 0;
     let mut absent_votes = 0;
-    let mut lowest_last_vote_slot = std::u64::MAX;
+    let mut lowest_last_vote_slot = u64::MAX;
     let mut lowest_total_stake = 0;
     for (node_pubkey, (last_vote_slot, vote_state, stake, total_stake)) in &last_votes {
         all_votes.entry(*node_pubkey).and_modify(|validator_votes| {
@@ -461,6 +460,9 @@ fn compute_slot_cost(
     let mut program_ids = HashMap::new();
     let mut cost_tracker = CostTracker::default();
 
+    let feature_set = FeatureSet::all_enabled();
+    let reserved_account_keys = ReservedAccountKeys::new_all_activated();
+
     for entry in entries {
         num_transactions += entry.transactions.len();
         entry
@@ -472,6 +474,7 @@ fn compute_slot_cost(
                     MessageHash::Compute,
                     None,
                     SimpleAddressLoader::Disabled,
+                    &reserved_account_keys.active,
                 )
                 .map_err(|err| {
                     warn!("Failed to compute cost of transaction: {:?}", err);
@@ -481,7 +484,7 @@ fn compute_slot_cost(
             .for_each(|transaction| {
                 num_programs += transaction.message().instructions().len();
 
-                let tx_cost = CostModel::calculate_cost(&transaction, &FeatureSet::all_enabled());
+                let tx_cost = CostModel::calculate_cost(&transaction, &feature_set);
                 let result = cost_tracker.try_add(&tx_cost);
                 if result.is_err() {
                     println!(
@@ -550,12 +553,7 @@ fn main() {
         unsafe { signal_hook::low_level::register(signal_hook::consts::SIGUSR1, || {}) }.unwrap();
     }
 
-    // Use std::usize::MAX for DEFAULT_MAX_*_SNAPSHOTS_TO_RETAIN such that
-    // ledger-tool commands won't accidentally remove any snapshots by default
-    const DEFAULT_MAX_FULL_SNAPSHOT_ARCHIVES_TO_RETAIN: usize = std::usize::MAX;
-    const DEFAULT_MAX_INCREMENTAL_SNAPSHOT_ARCHIVES_TO_RETAIN: usize = std::usize::MAX;
-
-    solana_logger::setup_with_default("solana=info");
+    solana_logger::setup_with_default_filter();
 
     let no_snapshot_arg = Arg::with_name("no_snapshot")
         .long("no-snapshot")
@@ -723,41 +721,19 @@ fn main() {
             .help(use_snapshot_archives_at_startup::cli::HELP)
             .long_help(use_snapshot_archives_at_startup::cli::LONG_HELP);
 
-    let default_max_full_snapshot_archives_to_retain =
-        &DEFAULT_MAX_FULL_SNAPSHOT_ARCHIVES_TO_RETAIN.to_string();
-    let maximum_full_snapshot_archives_to_retain =
-        Arg::with_name("maximum_full_snapshots_to_retain")
-            .long("maximum-full-snapshots-to-retain")
-            .alias("maximum-snapshots-to-retain")
-            .value_name("NUMBER")
-            .takes_value(true)
-            .default_value(default_max_full_snapshot_archives_to_retain)
-            .validator(validate_maximum_full_snapshot_archives_to_retain)
-            .help(
-                "The maximum number of full snapshot archives to hold on to when purging older \
-                 snapshots.",
-            );
-
-    let default_max_incremental_snapshot_archives_to_retain =
-        &DEFAULT_MAX_INCREMENTAL_SNAPSHOT_ARCHIVES_TO_RETAIN.to_string();
-    let maximum_incremental_snapshot_archives_to_retain =
-        Arg::with_name("maximum_incremental_snapshots_to_retain")
-            .long("maximum-incremental-snapshots-to-retain")
-            .value_name("NUMBER")
-            .takes_value(true)
-            .default_value(default_max_incremental_snapshot_archives_to_retain)
-            .validator(validate_maximum_incremental_snapshot_archives_to_retain)
-            .help(
-                "The maximum number of incremental snapshot archives to hold on to when purging \
-                 older snapshots.",
-            );
-
     let geyser_plugin_args = Arg::with_name("geyser_plugin_config")
         .long("geyser-plugin-config")
         .value_name("FILE")
         .takes_value(true)
         .multiple(true)
         .help("Specify the configuration file for the Geyser plugin.");
+
+    let log_messages_bytes_limit_arg = Arg::with_name("log_messages_bytes_limit")
+        .long("log-messages-bytes-limit")
+        .takes_value(true)
+        .validator(is_parsable::<usize>)
+        .value_name("BYTES")
+        .help("Maximum number of bytes written to the program log before truncation");
 
     let accounts_data_encoding_arg = Arg::with_name("encoding")
         .long("encoding")
@@ -988,6 +964,7 @@ fn main() {
                 .arg(&max_genesis_archive_unpacked_size_arg)
                 .arg(&debug_key_arg)
                 .arg(&geyser_plugin_args)
+                .arg(&log_messages_bytes_limit_arg)
                 .arg(&use_snapshot_archives_at_startup)
                 .arg(
                     Arg::with_name("skip_poh_verify")
@@ -1009,6 +986,16 @@ fn main() {
                         .long("enable-rpc-transaction-history")
                         .takes_value(false)
                         .help("Store transaction info for processed slots into local ledger"),
+                )
+                .arg(
+                    Arg::with_name("enable_extended_tx_metadata_storage")
+                        .long("enable-extended-tx-metadata-storage")
+                        .requires("enable_rpc_transaction_history")
+                        .takes_value(false)
+                        .help(
+                            "Include CPI inner instructions, logs, and return data in the historical \
+                             transaction info stored",
+                        ),
                 )
                 .arg(
                     Arg::with_name("run_final_hash_calc")
@@ -1143,9 +1130,8 @@ fn main() {
                 .arg(&hard_forks_arg)
                 .arg(&max_genesis_archive_unpacked_size_arg)
                 .arg(&snapshot_version_arg)
-                .arg(&maximum_full_snapshot_archives_to_retain)
-                .arg(&maximum_incremental_snapshot_archives_to_retain)
                 .arg(&geyser_plugin_args)
+                .arg(&log_messages_bytes_limit_arg)
                 .arg(&use_snapshot_archives_at_startup)
                 .arg(
                     Arg::with_name("snapshot_slot")
@@ -1358,6 +1344,7 @@ fn main() {
                 .arg(&halt_at_slot_arg)
                 .arg(&hard_forks_arg)
                 .arg(&geyser_plugin_args)
+                .arg(&log_messages_bytes_limit_arg)
                 .arg(&accounts_data_encoding_arg)
                 .arg(&use_snapshot_archives_at_startup)
                 .arg(&max_genesis_archive_unpacked_size_arg)
@@ -1420,6 +1407,7 @@ fn main() {
                 .arg(&hard_forks_arg)
                 .arg(&max_genesis_archive_unpacked_size_arg)
                 .arg(&geyser_plugin_args)
+                .arg(&log_messages_bytes_limit_arg)
                 .arg(&use_snapshot_archives_at_startup)
                 .arg(
                     Arg::with_name("warp_epoch")
@@ -1501,6 +1489,12 @@ fn main() {
 
     let verbose_level = matches.occurrences_of("verbose");
 
+    // Name the rayon global thread pool
+    rayon::ThreadPoolBuilder::new()
+        .thread_name(|i| format!("solRayonGlob{i:02}"))
+        .build_global()
+        .unwrap();
+
     match matches.subcommand() {
         ("bigtable", Some(arg_matches)) => bigtable_process_command(&ledger_path, arg_matches),
         ("blockstore", Some(arg_matches)) => blockstore_process_command(&ledger_path, arg_matches),
@@ -1512,7 +1506,6 @@ fn main() {
         | ("copy", Some(_))
         | ("dead-slots", Some(_))
         | ("duplicate-slots", Some(_))
-        | ("json", Some(_))
         | ("latest-optimistic-slots", Some(_))
         | ("list-roots", Some(_))
         | ("parse_full_frozen", Some(_))
@@ -1917,16 +1910,6 @@ fn main() {
                         })
                     };
 
-                    let maximum_full_snapshot_archives_to_retain = value_t_or_exit!(
-                        arg_matches,
-                        "maximum_full_snapshots_to_retain",
-                        NonZeroUsize
-                    );
-                    let maximum_incremental_snapshot_archives_to_retain = value_t_or_exit!(
-                        arg_matches,
-                        "maximum_incremental_snapshots_to_retain",
-                        NonZeroUsize
-                    );
                     let genesis_config = open_genesis_config_by(&ledger_path, arg_matches);
                     let mut process_options = parse_process_options(&ledger_path, arg_matches);
 
@@ -2305,8 +2288,6 @@ fn main() {
                                 output_directory.clone(),
                                 output_directory,
                                 snapshot_archive_format,
-                                maximum_full_snapshot_archives_to_retain,
-                                maximum_incremental_snapshot_archives_to_retain,
                             )
                             .unwrap_or_else(|err| {
                                 eprintln!("Unable to create incremental snapshot: {err}");
@@ -2330,8 +2311,6 @@ fn main() {
                                 output_directory.clone(),
                                 output_directory,
                                 snapshot_archive_format,
-                                maximum_full_snapshot_archives_to_retain,
-                                maximum_incremental_snapshot_archives_to_retain,
                             )
                             .unwrap_or_else(|err| {
                                 eprintln!("Unable to create snapshot: {err}");
@@ -2660,7 +2639,7 @@ fn main() {
                                     detail.voter_owner = *owner;
                                     detail.total_stake = delegation.stake;
                                     detail.activation_epoch = delegation.activation_epoch;
-                                    if delegation.deactivation_epoch < Epoch::max_value() {
+                                    if delegation.deactivation_epoch < Epoch::MAX {
                                         detail.deactivation_epoch =
                                             Some(delegation.deactivation_epoch);
                                     }
@@ -2767,7 +2746,7 @@ fn main() {
                         for (pubkey, warped_account) in all_accounts {
                             // Don't output sysvars; it's always updated but not related to
                             // inflation.
-                            if solana_sdk::sysvar::is_sysvar_id(&pubkey) {
+                            if solana_sdk::sysvar::check_id(warped_account.owner()) {
                                 continue;
                             }
 
@@ -2867,7 +2846,7 @@ fn main() {
                                                 detail.map(|d| d.rent_exempt_reserve),
                                             ),
                                             activation_epoch: format_or_na(detail.map(|d| {
-                                                if d.activation_epoch < Epoch::max_value() {
+                                                if d.activation_epoch < Epoch::MAX {
                                                     d.activation_epoch
                                                 } else {
                                                     // bootstraped

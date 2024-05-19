@@ -41,6 +41,13 @@ impl ShredData {
         }
     }
 
+    pub(super) fn chained_merkle_root(&self) -> Result<Hash, Error> {
+        match self {
+            Self::Legacy(_) => Err(Error::InvalidShredType),
+            Self::Merkle(shred) => shred.chained_merkle_root(),
+        }
+    }
+
     pub(super) fn merkle_root(&self) -> Result<Hash, Error> {
         match self {
             Self::Legacy(_) => Err(Error::InvalidShredType),
@@ -134,6 +141,13 @@ impl ShredData {
         match self {
             Self::Legacy(shred) => shred.set_last_in_slot(),
             Self::Merkle(_) => panic!("Not Implemented!"),
+        }
+    }
+
+    pub(super) fn retransmitter_signature(&self) -> Result<Signature, Error> {
+        match self {
+            Self::Legacy(_) => Err(Error::InvalidShredVariant),
+            Self::Merkle(shred) => shred.retransmitter_signature(),
         }
     }
 }

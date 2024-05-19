@@ -7,7 +7,12 @@ use {
 };
 
 #[repr(C)]
+<<<<<<< HEAD
 #[derive(Serialize, Deserialize, Default, PartialEq, Eq, Clone, Copy, Debug, AbiExample)]
+=======
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, Default, PartialEq, Eq, Clone, Copy, Debug)]
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
 #[serde(rename_all = "camelCase")]
 pub struct FeeCalculator {
     /// The current cost of a signature.
@@ -48,7 +53,8 @@ impl FeeCalculator {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug, AbiExample)]
+#[cfg_attr(feature = "frozen-abi", derive(AbiExample))]
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct FeeRateGovernor {
     // The current cost of a signature  This amount may increase/decrease over time based on
@@ -68,7 +74,7 @@ pub struct FeeRateGovernor {
     pub min_lamports_per_signature: u64,
     pub max_lamports_per_signature: u64,
 
-    // What portion of collected fees are to be destroyed, as a fraction of std::u8::MAX
+    // What portion of collected fees are to be destroyed, as a fraction of u8::MAX
     pub burn_percent: u8,
 }
 
@@ -120,7 +126,7 @@ impl FeeRateGovernor {
                 me.max_lamports_per_signature
                     .min(me.min_lamports_per_signature.max(
                         me.target_lamports_per_signature
-                            * std::cmp::min(latest_signatures_per_slot, std::u32::MAX as u64)
+                            * std::cmp::min(latest_signatures_per_slot, u32::MAX as u64)
                             / me.target_signatures_per_slot,
                     ));
 
@@ -307,7 +313,7 @@ mod tests {
         loop {
             let last_lamports_per_signature = f.lamports_per_signature;
 
-            f = FeeRateGovernor::new_derived(&f, std::u64::MAX);
+            f = FeeRateGovernor::new_derived(&f, u64::MAX);
             info!("[up] f.lamports_per_signature={}", f.lamports_per_signature);
 
             // some maximum target reached

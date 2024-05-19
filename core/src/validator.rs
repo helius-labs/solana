@@ -47,9 +47,9 @@ use {
             ClusterInfo, Node, DEFAULT_CONTACT_DEBUG_INTERVAL_MILLIS,
             DEFAULT_CONTACT_SAVE_INTERVAL_MILLIS,
         },
+        contact_info::ContactInfo,
         crds_gossip_pull::CRDS_GOSSIP_PULL_CRDS_TIMEOUT_MS,
         gossip_service::GossipService,
-        legacy_contact_info::LegacyContactInfo as ContactInfo,
     },
     solana_ledger::{
         bank_forks_utils,
@@ -73,7 +73,11 @@ use {
         poh_recorder::PohRecorder,
         poh_service::{self, PohService},
     },
+<<<<<<< HEAD
     solana_program_runtime::runtime_config::RuntimeConfig,
+=======
+    solana_rayon_threadlimit::get_max_thread_count,
+>>>>>>> 6631e5f4d9605821afb0e021fbd0c24e6fc46d20
     solana_rpc::{
         max_slots::MaxSlots,
         optimistically_confirmed_bank_tracker::{
@@ -97,6 +101,7 @@ use {
         bank_forks::BankForks,
         commitment::BlockCommitmentCache,
         prioritization_fee_cache::PrioritizationFeeCache,
+        runtime_config::RuntimeConfig,
         snapshot_archive_info::SnapshotArchiveInfoGetter,
         snapshot_bank_utils::{self, DISABLED_SNAPSHOT_ARCHIVE_INTERVAL},
         snapshot_config::SnapshotConfig,
@@ -119,10 +124,11 @@ use {
     solana_turbine::{self, broadcast_stage::BroadcastStageType},
     solana_unified_scheduler_pool::DefaultSchedulerPool,
     solana_vote_program::vote_state,
-    solana_wen_restart::wen_restart::wait_for_wen_restart,
+    solana_wen_restart::wen_restart::{wait_for_wen_restart, WenRestartConfig},
     std::{
         collections::{HashMap, HashSet},
         net::SocketAddr,
+        num::NonZeroUsize,
         path::{Path, PathBuf},
         sync::{
             atomic::{AtomicBool, AtomicU64, Ordering},
@@ -260,7 +266,6 @@ pub struct ValidatorConfig {
     pub wait_to_vote_slot: Option<Slot>,
     pub ledger_column_options: LedgerColumnOptions,
     pub runtime_config: RuntimeConfig,
-    pub replay_slots_concurrently: bool,
     pub banking_trace_dir_byte_limit: banking_trace::DirByteLimit,
     pub block_verification_method: BlockVerificationMethod,
     pub block_production_method: BlockProductionMethod,
@@ -268,6 +273,10 @@ pub struct ValidatorConfig {
     pub use_snapshot_archives_at_startup: UseSnapshotArchivesAtStartup,
     pub wen_restart_proto_path: Option<PathBuf>,
     pub unified_scheduler_handler_threads: Option<usize>,
+    pub ip_echo_server_threads: NonZeroUsize,
+    pub replay_forks_threads: NonZeroUsize,
+    pub replay_transactions_threads: NonZeroUsize,
+    pub delay_leader_block_for_pending_fork: bool,
 }
 
 impl Default for ValidatorConfig {
@@ -296,7 +305,7 @@ impl Default for ValidatorConfig {
             repair_validators: None,
             repair_whitelist: Arc::new(RwLock::new(HashSet::default())),
             gossip_validators: None,
-            accounts_hash_interval_slots: std::u64::MAX,
+            accounts_hash_interval_slots: u64::MAX,
             max_genesis_archive_unpacked_size: MAX_GENESIS_ARCHIVE_UNPACKED_SIZE,
             wal_recovery_mode: None,
             run_verification: true,
@@ -328,7 +337,6 @@ impl Default for ValidatorConfig {
             wait_to_vote_slot: None,
             ledger_column_options: LedgerColumnOptions::default(),
             runtime_config: RuntimeConfig::default(),
-            replay_slots_concurrently: false,
             banking_trace_dir_byte_limit: 0,
             block_verification_method: BlockVerificationMethod::default(),
             block_production_method: BlockProductionMethod::default(),
@@ -336,6 +344,10 @@ impl Default for ValidatorConfig {
             use_snapshot_archives_at_startup: UseSnapshotArchivesAtStartup::default(),
             wen_restart_proto_path: None,
             unified_scheduler_handler_threads: None,
+            ip_echo_server_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
+            replay_forks_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
+            replay_transactions_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
+            delay_leader_block_for_pending_fork: false,
         }
     }
 }
@@ -345,7 +357,10 @@ impl ValidatorConfig {
         Self {
             enforce_ulimit_nofile: false,
             rpc_config: JsonRpcConfig::default_for_test(),
-            block_production_method: BlockProductionMethod::ThreadLocalMultiIterator,
+            block_production_method: BlockProductionMethod::default(),
+            replay_forks_threads: NonZeroUsize::new(1).expect("1 is non-zero"),
+            replay_transactions_threads: NonZeroUsize::new(get_max_thread_count())
+                .expect("thread count is non-zero"),
             ..Self::default()
         }
     }
@@ -460,7 +475,7 @@ pub struct Validator {
     stats_reporter_service: StatsReporterService,
     gossip_service: GossipService,
     serve_repair_service: ServeRepairService,
-    completed_data_sets_service: CompletedDataSetsService,
+    completed_data_sets_service: Option<CompletedDataSetsService>,
     snapshot_packager_service: Option<SnapshotPackagerService>,
     poh_recorder: Arc<RwLock<PohRecorder>>,
     poh_service: PohService,
@@ -499,8 +514,11 @@ impl Validator {
         use_quic: bool,
         tpu_connection_pool_size: usize,
         tpu_enable_udp: bool,
+        tpu_max_connections_per_ipaddr_per_minute: u64,
         admin_rpc_service_post_init: Arc<RwLock<Option<AdminRpcRequestMetadataPostInit>>>,
     ) -> Result<Self, String> {
+        let start_time = Instant::now();
+
         let id = identity_keypair.pubkey();
         assert_eq!(&id, node.info.pubkey());
 
@@ -913,15 +931,6 @@ impl Validator {
         ));
 
         let max_slots = Arc::new(MaxSlots::default());
-        let (completed_data_sets_sender, completed_data_sets_receiver) =
-            bounded(MAX_COMPLETED_DATA_SETS_IN_CHANNEL);
-        let completed_data_sets_service = CompletedDataSetsService::new(
-            completed_data_sets_receiver,
-            blockstore.clone(),
-            rpc_subscriptions.clone(),
-            exit.clone(),
-            max_slots.clone(),
-        );
 
         let startup_verification_complete;
         let (poh_recorder, entry_receiver, record_receiver) = {
@@ -933,7 +942,7 @@ impl Validator {
                 bank.clone(),
                 None,
                 bank.ticks_per_slot(),
-                &id,
+                config.delay_leader_block_for_pending_fork,
                 blockstore.clone(),
                 blockstore.get_new_shred_signal(0),
                 &leader_schedule_cache,
@@ -974,6 +983,8 @@ impl Validator {
         let (
             json_rpc_service,
             pubsub_service,
+            completed_data_sets_sender,
+            completed_data_sets_service,
             optimistically_confirmed_bank_tracker,
             bank_notification_sender,
         ) = if let Some((rpc_addr, rpc_pubsub_addr)) = config.rpc_addrs {
@@ -1019,24 +1030,43 @@ impl Validator {
                 prioritization_fee_cache.clone(),
             )?;
 
-            (
-                Some(json_rpc_service),
-                if !config.rpc_config.full_api {
-                    None
-                } else {
-                    let (trigger, pubsub_service) = PubSubService::new(
-                        config.pubsub_config.clone(),
-                        &rpc_subscriptions,
-                        rpc_pubsub_addr,
-                    );
-                    config
-                        .validator_exit
-                        .write()
-                        .unwrap()
-                        .register_exit(Box::new(move || trigger.cancel()));
+            let pubsub_service = if !config.rpc_config.full_api {
+                None
+            } else {
+                let (trigger, pubsub_service) = PubSubService::new(
+                    config.pubsub_config.clone(),
+                    &rpc_subscriptions,
+                    rpc_pubsub_addr,
+                );
+                config
+                    .validator_exit
+                    .write()
+                    .unwrap()
+                    .register_exit(Box::new(move || trigger.cancel()));
 
-                    Some(pubsub_service)
-                },
+                Some(pubsub_service)
+            };
+
+            let (completed_data_sets_sender, completed_data_sets_service) =
+                if !config.rpc_config.full_api {
+                    (None, None)
+                } else {
+                    let (completed_data_sets_sender, completed_data_sets_receiver) =
+                        bounded(MAX_COMPLETED_DATA_SETS_IN_CHANNEL);
+                    let completed_data_sets_service = CompletedDataSetsService::new(
+                        completed_data_sets_receiver,
+                        blockstore.clone(),
+                        rpc_subscriptions.clone(),
+                        exit.clone(),
+                        max_slots.clone(),
+                    );
+                    (
+                        Some(completed_data_sets_sender),
+                        Some(completed_data_sets_service),
+                    )
+                };
+
+            let optimistically_confirmed_bank_tracker =
                 Some(OptimisticallyConfirmedBankTracker::new(
                     bank_notification_receiver,
                     exit.clone(),
@@ -1045,14 +1075,21 @@ impl Validator {
                     rpc_subscriptions.clone(),
                     confirmed_bank_subscribers,
                     prioritization_fee_cache.clone(),
-                )),
-                Some(BankNotificationSenderConfig {
-                    sender: bank_notification_sender,
-                    should_send_parents: geyser_plugin_service.is_some(),
-                }),
+                ));
+            let bank_notification_sender_config = Some(BankNotificationSenderConfig {
+                sender: bank_notification_sender,
+                should_send_parents: geyser_plugin_service.is_some(),
+            });
+            (
+                Some(json_rpc_service),
+                pubsub_service,
+                completed_data_sets_sender,
+                completed_data_sets_service,
+                optimistically_confirmed_bank_tracker,
+                bank_notification_sender_config,
             )
         } else {
-            (None, None, None, None)
+            (None, None, None, None, None, None)
         };
 
         if config.halt_at_slot.is_some() {
@@ -1072,6 +1109,7 @@ impl Validator {
             None => None,
             Some(tcp_listener) => Some(solana_net_utils::ip_echo_server(
                 tcp_listener,
+                config.ip_echo_server_threads,
                 Some(node.info.shred_version()),
             )),
         };
@@ -1305,14 +1343,15 @@ impl Validator {
                 repair_validators: config.repair_validators.clone(),
                 repair_whitelist: config.repair_whitelist.clone(),
                 wait_for_vote_to_start_leader,
-                replay_slots_concurrently: config.replay_slots_concurrently,
+                replay_forks_threads: config.replay_forks_threads,
+                replay_transactions_threads: config.replay_transactions_threads,
             },
             &max_slots,
             block_metadata_notifier,
             config.wait_to_vote_slot,
-            accounts_background_request_sender,
+            accounts_background_request_sender.clone(),
             config.runtime_config.log_messages_bytes_limit,
-            &connection_cache,
+            json_rpc_service.is_some().then_some(&connection_cache), // for the cache warmer only used for STS for RPC service
             &prioritization_fee_cache,
             banking_tracer.clone(),
             turbine_quic_endpoint_sender.clone(),
@@ -1325,16 +1364,20 @@ impl Validator {
 
         if in_wen_restart {
             info!("Waiting for wen_restart phase one to finish");
-            match wait_for_wen_restart(
-                &config.wen_restart_proto_path.clone().unwrap(),
+            match wait_for_wen_restart(WenRestartConfig {
+                wen_restart_path: config.wen_restart_proto_path.clone().unwrap(),
                 last_vote,
-                blockstore.clone(),
-                cluster_info.clone(),
-                bank_forks.clone(),
-                wen_restart_repair_slots.clone(),
-                WAIT_FOR_WEN_RESTART_SUPERMAJORITY_THRESHOLD_PERCENT,
-                exit.clone(),
-            ) {
+                blockstore: blockstore.clone(),
+                cluster_info: cluster_info.clone(),
+                bank_forks: bank_forks.clone(),
+                wen_restart_repair_slots: wen_restart_repair_slots.clone(),
+                wait_for_supermajority_threshold_percent:
+                    WAIT_FOR_WEN_RESTART_SUPERMAJORITY_THRESHOLD_PERCENT,
+                snapshot_config: config.snapshot_config.clone(),
+                accounts_background_request_sender: accounts_background_request_sender.clone(),
+                genesis_config_hash: genesis_config.hash(),
+                exit: exit.clone(),
+            }) {
                 Ok(()) => {
                     return Err("wen_restart phase one completedy".to_string());
                 }
@@ -1380,6 +1423,7 @@ impl Validator {
             banking_tracer,
             tracer_thread,
             tpu_enable_udp,
+            tpu_max_connections_per_ipaddr_per_minute,
             &prioritization_fee_cache,
             config.block_production_method.clone(),
             config.generator_config.clone(),
@@ -1390,6 +1434,7 @@ impl Validator {
             ("id", id.to_string(), String),
             ("version", solana_version::version!(), String),
             ("cluster_type", genesis_config.cluster_type as u32, i64),
+            ("elapsed_ms", start_time.elapsed().as_millis() as i64, i64),
             ("waited_for_supermajority", waited_for_supermajority, bool),
             ("expected_shred_version", config.expected_shred_version, Option<i64>),
         );
@@ -1588,9 +1633,11 @@ impl Validator {
                 .transpose()
                 .unwrap();
         }
-        self.completed_data_sets_service
-            .join()
-            .expect("completed_data_sets_service");
+        if let Some(completed_data_sets_service) = self.completed_data_sets_service {
+            completed_data_sets_service
+                .join()
+                .expect("completed_data_sets_service");
+        }
         if let Some(ip_echo_server) = self.ip_echo_server {
             ip_echo_server.shutdown_background();
         }
@@ -2086,11 +2133,13 @@ fn maybe_warp_slot(
             warp_slot,
             solana_accounts_db::accounts_db::CalcAccountsHashDataSource::Storages,
         ));
-        bank_forks.set_root(
-            warp_slot,
-            accounts_background_request_sender,
-            Some(warp_slot),
-        );
+        bank_forks
+            .set_root(
+                warp_slot,
+                accounts_background_request_sender,
+                Some(warp_slot),
+            )
+            .map_err(|err| err.to_string())?;
         leader_schedule_cache.set_root(&bank_forks.root_bank());
 
         let full_snapshot_archive_info = match snapshot_bank_utils::bank_to_full_snapshot_archive(
@@ -2100,12 +2149,6 @@ fn maybe_warp_slot(
             &config.snapshot_config.full_snapshot_archives_dir,
             &config.snapshot_config.incremental_snapshot_archives_dir,
             config.snapshot_config.archive_format,
-            config
-                .snapshot_config
-                .maximum_full_snapshot_archives_to_retain,
-            config
-                .snapshot_config
-                .maximum_incremental_snapshot_archives_to_retain,
         ) {
             Ok(archive_info) => archive_info,
             Err(e) => return Err(format!("Unable to create snapshot: {e}")),
@@ -2516,7 +2559,7 @@ mod tests {
         super::*,
         crossbeam_channel::{bounded, RecvTimeoutError},
         solana_entry::entry,
-        solana_gossip::contact_info::{ContactInfo, LegacyContactInfo},
+        solana_gossip::contact_info::ContactInfo,
         solana_ledger::{
             blockstore, create_new_tmp_ledger, genesis_utils::create_genesis_config_with_leader,
             get_tmp_ledger_path_auto_delete,
@@ -2556,7 +2599,7 @@ mod tests {
             &validator_ledger_path,
             &voting_keypair.pubkey(),
             Arc::new(RwLock::new(vec![voting_keypair])),
-            vec![LegacyContactInfo::try_from(&leader_node.info).unwrap()],
+            vec![leader_node.info],
             &config,
             true, // should_check_duplicate_instance
             None, // rpc_to_plugin_manager_receiver
@@ -2565,6 +2608,7 @@ mod tests {
             DEFAULT_TPU_USE_QUIC,
             DEFAULT_TPU_CONNECTION_POOL_SIZE,
             DEFAULT_TPU_ENABLE_UDP,
+            32, // max connections per IpAddr per minute for test
             Arc::new(RwLock::new(None)),
         )
         .expect("assume successful validator start");
@@ -2641,7 +2685,7 @@ mod tests {
                     &validator_ledger_path,
                     &vote_account_keypair.pubkey(),
                     Arc::new(RwLock::new(vec![Arc::new(vote_account_keypair)])),
-                    vec![LegacyContactInfo::try_from(&leader_node.info).unwrap()],
+                    vec![leader_node.info.clone()],
                     &config,
                     true, // should_check_duplicate_instance.
                     None, // rpc_to_plugin_manager_receiver
@@ -2650,6 +2694,7 @@ mod tests {
                     DEFAULT_TPU_USE_QUIC,
                     DEFAULT_TPU_CONNECTION_POOL_SIZE,
                     DEFAULT_TPU_ENABLE_UDP,
+                    32, // max connections per IpAddr per minute for test
                     Arc::new(RwLock::new(None)),
                 )
                 .expect("assume successful validator start")
