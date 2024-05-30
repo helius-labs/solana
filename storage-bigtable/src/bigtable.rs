@@ -6,7 +6,7 @@ use {
         compression::{compress_best, decompress},
         root_ca_certificate, CredentialType,
     },
-    backoff::{future::retry, ExponentialBackoff},
+    backoff::{future::retry, Error as BackoffError, ExponentialBackoff},
     bincode::de::read,
     log::*,
     solana_metrics::datapoint,
@@ -95,23 +95,6 @@ fn to_backoff_err(err: Error) -> BackoffError<Error> {
         }
     }
     err.into()
-}
-
-#[derive(Clone, Debug)]
-pub enum TableName {
-    Tx,
-    Blocks,
-    TxByAddr,
-}
-
-impl Display for TableName {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            TableName::Tx => write!(f, "tx"),
-            TableName::Blocks => write!(f, "blocks"),
-            TableName::TxByAddr => write!(f, "tx-by-addr"),
-        }
-    }
 }
 
 impl std::convert::From<std::io::Error> for Error {
@@ -300,7 +283,7 @@ impl BigTableConnection {
 
     pub async fn put_bincode_cells_with_retry<T>(
         &self,
-        table: &TableName,
+        table: &str,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -314,11 +297,7 @@ impl BigTableConnection {
         .await
     }
 
-    pub async fn delete_rows_with_retry(
-        &self,
-        table: &TableName,
-        row_keys: &[RowKey],
-    ) -> Result<()> {
+    pub async fn delete_rows_with_retry(&self, table: &str, row_keys: &[RowKey]) -> Result<()> {
         retry(ExponentialBackoff::default(), || async {
             let mut client = self.client();
             Ok(client.delete_rows(table, row_keys).await?)
@@ -328,7 +307,7 @@ impl BigTableConnection {
 
     pub async fn get_bincode_cells_with_retry<T>(
         &self,
-        table: &TableName,
+        table: &str,
         row_keys: &[RowKey],
     ) -> Result<Vec<(RowKey, Result<T>)>>
     where
@@ -343,7 +322,7 @@ impl BigTableConnection {
 
     pub async fn put_protobuf_cells_with_retry<T>(
         &self,
-        table: &TableName,
+        table: &str,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -470,7 +449,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// If `rows_limit` is zero, this method will return an empty array.
     pub async fn get_row_keys(
         &mut self,
-        table_name: &TableName,
+        table_name: &str,
         start_at: Option<RowKey>,
         end_at: Option<RowKey>,
         rows_limit: i64,
@@ -527,11 +506,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     }
 
     /// Check whether a row key exists in a `table`
-    pub async fn row_key_exists(
-        &mut self,
-        table_name: &TableName,
-        row_key: RowKey,
-    ) -> Result<bool> {
+    pub async fn row_key_exists(&mut self, table_name: &str, row_key: RowKey) -> Result<bool> {
         self.refresh_access_token();
 
         let response = self
@@ -573,7 +548,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// If `rows_limit` is zero, this method will return an empty array.
     pub async fn get_row_data(
         &mut self,
-        table_name: &TableName,
+        table_name: &str,
         start_at: Option<RowKey>,
         end_at: Option<RowKey>,
         rows_limit: i64,
@@ -617,7 +592,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// Get latest data from multiple rows of `table`, if those rows exist.
     pub async fn get_multi_row_data(
         &mut self,
-        table_name: &TableName,
+        table_name: &str,
         row_keys: &[RowKey],
     ) -> Result<Vec<(RowKey, RowData)>> {
         self.refresh_access_token();
@@ -657,7 +632,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// returned.
     pub async fn get_single_row_data(
         &mut self,
-        table_name: &TableName,
+        table_name: &str,
         row_key: RowKey,
     ) -> Result<RowData> {
         self.refresh_access_token();
@@ -692,7 +667,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     }
 
     /// Delete one or more `table` rows
-    async fn delete_rows(&mut self, table_name: &TableName, row_keys: &[RowKey]) -> Result<()> {
+    async fn delete_rows(&mut self, table_name: &str, row_keys: &[RowKey]) -> Result<()> {
         self.refresh_access_token();
 
         let mut entries = vec![];
@@ -735,7 +710,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
     /// Store data for one or more `table` rows in the `family_name` Column family
     async fn put_row_data(
         &mut self,
-        table_name: &TableName,
+        table_name: &str,
         family_name: &str,
         row_data: &[(&RowKey, RowData)],
     ) -> Result<()> {
@@ -786,7 +761,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         Ok(())
     }
 
-    pub async fn get_bincode_cell<T>(&mut self, table: &TableName, key: RowKey) -> Result<T>
+    pub async fn get_bincode_cell<T>(&mut self, table: &str, key: RowKey) -> Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
@@ -796,7 +771,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn get_bincode_cells<T>(
         &mut self,
-        table: &TableName,
+        table: &str,
         keys: &[RowKey],
     ) -> Result<Vec<(RowKey, Result<T>)>>
     where
@@ -826,7 +801,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn get_protobuf_or_bincode_cell<B, P>(
         &mut self,
-        table: &TableName,
+        table: &str,
         key: RowKey,
     ) -> Result<CellData<B, P>>
     where
@@ -839,7 +814,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn get_protobuf_or_bincode_cells<'a, B, P>(
         &mut self,
-        table: &'a TableName,
+        table: &'a str,
         row_keys: impl IntoIterator<Item = RowKey>,
     ) -> Result<impl Iterator<Item = (RowKey, CellData<B, P>)> + 'a>
     where
@@ -864,7 +839,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn put_bincode_cells<T>(
         &mut self,
-        table: &TableName,
+        table: &str,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -884,7 +859,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     pub async fn put_protobuf_cells<T>(
         &mut self,
-        table: &TableName,
+        table: &str,
         cells: &[(RowKey, T)],
     ) -> Result<usize>
     where
@@ -906,13 +881,19 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
     async fn read_rows(
         &mut self,
-        table_name: &TableName,
+        table_name: &str,
         request: ReadRowsRequest,
     ) -> Result<tonic::Response<tonic::Streaming<ReadRowsResponse>>> {
-        let datapoint_bigtable = match table_name {
-            TableName::Blocks => "bigtable_blocks",
-            TableName::Tx => "bigtable_tx",
-            TableName::TxByAddr => "bigtable_tx-by-addr",
+        let datapoint_bigtable = if table_name == "blocks" {
+            "bigtable_blocks"
+        } else if table_name == "tx" {
+            "bigtable_tx"
+        } else if table_name == "tx-by-addr" {
+            "bigtable_tx-by-addr"
+        } else if table_name == "entries" {
+            "bigtable_entries"
+        } else {
+            "bigtable_unknown"
         };
         datapoint_info!(datapoint_bigtable, ("read_rows", 1, i64));
         tokio::time::timeout(
@@ -930,7 +911,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
 
 pub(crate) fn deserialize_protobuf_or_bincode_cell_data<B, P>(
     row_data: RowDataSlice,
-    table: &TableName,
+    table: &str,
     key: RowKey,
 ) -> Result<CellData<B, P>>
 where
@@ -949,7 +930,7 @@ where
 
 pub(crate) fn deserialize_protobuf_cell_data<T>(
     row_data: RowDataSlice,
-    table: &TableName,
+    table: &str,
     key: RowKey,
 ) -> Result<T>
 where
@@ -970,7 +951,7 @@ where
 
 pub(crate) fn deserialize_bincode_cell_data<T>(
     row_data: RowDataSlice,
-    table: &TableName,
+    table: &str,
     key: RowKey,
 ) -> Result<T>
 where
@@ -1075,7 +1056,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("proto".to_string(), protobuf_block.clone())],
-            &TableName::Tx,
+            "tx",
             "".to_string(),
         )
         .unwrap();
@@ -1090,7 +1071,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("bin".to_string(), bincode_block.clone())],
-            &TableName::Tx,
+            "tx",
             "".to_string(),
         )
         .unwrap();
@@ -1119,7 +1100,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("proto".to_string(), bincode_block)],
-            &TableName::Tx,
+            "tx",
             "".to_string(),
         );
         assert!(result.is_err());
@@ -1129,7 +1110,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("proto".to_string(), vec![1, 2, 3, 4])],
-            &TableName::Tx,
+            "tx",
             "".to_string(),
         );
         assert!(result.is_err());
@@ -1137,11 +1118,7 @@ mod tests {
         let result = deserialize_protobuf_or_bincode_cell_data::<
             StoredConfirmedBlock,
             generated::ConfirmedBlock,
-        >(
-            &[("bin".to_string(), protobuf_block)],
-            &TableName::Tx,
-            "".to_string(),
-        );
+        >(&[("bin".to_string(), protobuf_block)], "tx", "".to_string());
         assert!(result.is_err());
 
         let result = deserialize_protobuf_or_bincode_cell_data::<
@@ -1149,7 +1126,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("bin".to_string(), vec![1, 2, 3, 4])],
-            &TableName::Tx,
+            "tx",
             "".to_string(),
         );
         assert!(result.is_err());
