@@ -7,16 +7,12 @@ use {
         root_ca_certificate, CredentialType,
     },
     backoff::{future::retry, Error as BackoffError, ExponentialBackoff},
-    bincode::de::read,
     log::*,
-    solana_metrics::datapoint,
     std::{
-        fmt::Display,
         str::FromStr,
         time::{Duration, Instant},
     },
     thiserror::Error,
-    tokio::time::error::Elapsed,
     tonic::{codegen::InterceptedService, transport::ClientTlsConfig, Request, Status},
 };
 
@@ -361,13 +357,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         let mut cell_version_ok = true;
         let started = Instant::now();
 
-        while let Some(res) = tokio::time::timeout(
-            self.timeout.unwrap_or(Duration::from_secs(30)),
-            rrr.message(),
-        )
-        .await
-        .map_err(|_| Error::Timeout)??
-        {
+        while let Some(res) = rrr.message().await? {
             if let Some(timeout) = self.timeout {
                 if Instant::now().duration_since(started) > timeout {
                     return Err(Error::Timeout);
@@ -1056,7 +1046,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("proto".to_string(), protobuf_block.clone())],
-            "tx",
+            "",
             "".to_string(),
         )
         .unwrap();
@@ -1071,7 +1061,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("bin".to_string(), bincode_block.clone())],
-            "tx",
+            "",
             "".to_string(),
         )
         .unwrap();
@@ -1098,11 +1088,7 @@ mod tests {
         let result = deserialize_protobuf_or_bincode_cell_data::<
             StoredConfirmedBlock,
             generated::ConfirmedBlock,
-        >(
-            &[("proto".to_string(), bincode_block)],
-            "tx",
-            "".to_string(),
-        );
+        >(&[("proto".to_string(), bincode_block)], "", "".to_string());
         assert!(result.is_err());
 
         let result = deserialize_protobuf_or_bincode_cell_data::<
@@ -1110,7 +1096,7 @@ mod tests {
             generated::ConfirmedBlock,
         >(
             &[("proto".to_string(), vec![1, 2, 3, 4])],
-            "tx",
+            "",
             "".to_string(),
         );
         assert!(result.is_err());
@@ -1118,17 +1104,13 @@ mod tests {
         let result = deserialize_protobuf_or_bincode_cell_data::<
             StoredConfirmedBlock,
             generated::ConfirmedBlock,
-        >(&[("bin".to_string(), protobuf_block)], "tx", "".to_string());
+        >(&[("bin".to_string(), protobuf_block)], "", "".to_string());
         assert!(result.is_err());
 
         let result = deserialize_protobuf_or_bincode_cell_data::<
             StoredConfirmedBlock,
             generated::ConfirmedBlock,
-        >(
-            &[("bin".to_string(), vec![1, 2, 3, 4])],
-            "tx",
-            "".to_string(),
-        );
+        >(&[("bin".to_string(), vec![1, 2, 3, 4])], "", "".to_string());
         assert!(result.is_err());
     }
 }
