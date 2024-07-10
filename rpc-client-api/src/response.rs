@@ -310,6 +310,32 @@ pub struct RpcContactInfo {
     pub shred_version: Option<u16>,
 }
 
+// Custom Helius RpcContactInfo that includes TPU forwards.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcContactInfoV2 {
+    /// Pubkey of the node as a base-58 string
+    pub pubkey: String,
+    /// Gossip port
+    pub gossip: Option<SocketAddr>,
+    /// Tpu UDP port
+    pub tpu: Option<SocketAddr>,
+    /// Tpu QUIC port
+    pub tpu_quic: Option<SocketAddr>,
+    // Tpu forwards QUIC port
+    pub tpu_forwards_quic: Option<SocketAddr>,
+    /// JSON RPC port
+    pub rpc: Option<SocketAddr>,
+    /// WebSocket PubSub port
+    pub pubsub: Option<SocketAddr>,
+    /// Software version
+    pub version: Option<String>,
+    /// First 4 bytes of the FeatureSet identifier
+    pub feature_set: Option<u32>,
+    /// Shred version
+    pub shred_version: Option<u16>,
+}
+
 /// Map of leader base58 identity pubkeys to the slot indices relative to the first epoch slot
 pub type RpcLeaderSchedule = HashMap<String, Vec<usize>>;
 

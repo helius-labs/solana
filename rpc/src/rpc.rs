@@ -3261,6 +3261,9 @@ pub mod rpc_full {
         #[rpc(meta, name = "getClusterNodes")]
         fn get_cluster_nodes(&self, meta: Self::Metadata) -> Result<Vec<RpcContactInfo>>;
 
+        #[rpc(meta, name = "getClusterNodesV2")]
+        fn get_cluster_nodes_v2(&self, meta: Self::Metadata) -> Result<Vec<RpcContactInfoV2>>;
+
         #[rpc(meta, name = "getRecentPerformanceSamples")]
         fn get_recent_performance_samples(
             &self,
@@ -3462,6 +3465,62 @@ pub mod rpc_full {
                                 .filter(|addr| socket_addr_space.check(addr)),
                             tpu_quic: contact_info
                                 .tpu(Protocol::QUIC)
+                                .ok()
+                                .filter(|addr| socket_addr_space.check(addr)),
+                            rpc: contact_info
+                                .rpc()
+                                .ok()
+                                .filter(|addr| socket_addr_space.check(addr)),
+                            pubsub: contact_info
+                                .rpc_pubsub()
+                                .ok()
+                                .filter(|addr| socket_addr_space.check(addr)),
+                            version,
+                            feature_set,
+                            shred_version: Some(my_shred_version),
+                        })
+                    } else {
+                        None // Exclude spy nodes
+                    }
+                })
+                .collect())
+        }
+
+        fn get_cluster_nodes_v2(&self, meta: Self::Metadata) -> Result<Vec<RpcContactInfoV2>> {
+            debug!("get_cluster_nodes_v2 rpc request received");
+            let cluster_info = &meta.cluster_info;
+            let socket_addr_space = cluster_info.socket_addr_space();
+            let my_shred_version = cluster_info.my_shred_version();
+            Ok(cluster_info
+                .all_peers()
+                .iter()
+                .filter_map(|(contact_info, _)| {
+                    if my_shred_version == contact_info.shred_version()
+                        && contact_info
+                            .gossip()
+                            .map(|addr| socket_addr_space.check(&addr))
+                            .unwrap_or_default()
+                    {
+                        let (version, feature_set) = if let Some(version) =
+                            cluster_info.get_node_version(contact_info.pubkey())
+                        {
+                            (Some(version.to_string()), Some(version.feature_set))
+                        } else {
+                            (None, None)
+                        };
+                        Some(RpcContactInfoV2 {
+                            pubkey: contact_info.pubkey().to_string(),
+                            gossip: contact_info.gossip().ok(),
+                            tpu: contact_info
+                                .tpu(Protocol::UDP)
+                                .ok()
+                                .filter(|addr| socket_addr_space.check(addr)),
+                            tpu_quic: contact_info
+                                .tpu(Protocol::QUIC)
+                                .ok()
+                                .filter(|addr| socket_addr_space.check(addr)),
+                            tpu_forwards_quic: contact_info
+                                .tpu_forwards(Protocol::QUIC)
                                 .ok()
                                 .filter(|addr| socket_addr_space.check(addr)),
                             rpc: contact_info
