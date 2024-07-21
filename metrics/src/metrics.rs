@@ -146,7 +146,9 @@ impl MetricsWriter for InfluxDbMetricsWriter {
             debug!("submitting {} points", points.len());
 
             let host_id = HOST_ID.read().unwrap();
-            let host_name = HOST_NAME.read().unwrap();
+            let host_name = gethostname()
+                .into_string()
+                .unwrap_or_else(|_| "".to_string());
 
             let line = serialize_points(&points, &host_id, &host_name);
 
@@ -405,14 +407,6 @@ fn get_singleton_agent() -> &'static MetricsAgent {
 
 lazy_static! {
     static ref HOST_ID: Arc<RwLock<String>> = {
-        Arc::new(RwLock::new({
-            let hostname: String = gethostname()
-                .into_string()
-                .unwrap_or_else(|_| "".to_string());
-            format!("{}", hash(hostname.as_bytes()))
-        }))
-    };
-    static ref HOST_NAME: Arc<RwLock<String>> = {
         Arc::new(RwLock::new({
             let hostname: String = gethostname()
                 .into_string()
