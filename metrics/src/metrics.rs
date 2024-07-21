@@ -99,9 +99,10 @@ impl InfluxDbMetricsWriter {
     }
 }
 
-pub fn serialize_points(points: &Vec<DataPoint>, host_id: &str) -> String {
+pub fn serialize_points(points: &Vec<DataPoint>, host_id: &str, host_name: &str) -> String {
     const TIMESTAMP_LEN: usize = 20;
     const HOST_ID_LEN: usize = 8; // "host_id=".len()
+    const HOST_NAME_LEN: usize = 10; // "host_name=".len()
     const EXTRA_LEN: usize = 2; // "=,".len()
     let mut len = 0;
     for point in points {
@@ -114,10 +115,15 @@ pub fn serialize_points(points: &Vec<DataPoint>, host_id: &str) -> String {
         len += point.name.len();
         len += TIMESTAMP_LEN;
         len += host_id.len() + HOST_ID_LEN;
+        len += host_name.len() + HOST_NAME_LEN;
     }
     let mut line = String::with_capacity(len);
     for point in points {
-        let _ = write!(line, "{},host_id={}", &point.name, host_id);
+        let _ = write!(
+            line,
+            "{},host_id={},host_name={}",
+            &point.name, host_id, host_name
+        );
         for (name, value) in point.tags.iter() {
             let _ = write!(line, ",{name}={value}");
         }
@@ -140,8 +146,9 @@ impl MetricsWriter for InfluxDbMetricsWriter {
             debug!("submitting {} points", points.len());
 
             let host_id = HOST_ID.read().unwrap();
+            let host_name = HOST_NAME.read().unwrap();
 
-            let line = serialize_points(&points, &host_id);
+            let line = serialize_points(&points, &host_id, &host_name);
 
             let client = reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(5))
@@ -398,6 +405,14 @@ fn get_singleton_agent() -> &'static MetricsAgent {
 
 lazy_static! {
     static ref HOST_ID: Arc<RwLock<String>> = {
+        Arc::new(RwLock::new({
+            let hostname: String = gethostname()
+                .into_string()
+                .unwrap_or_else(|_| "".to_string());
+            format!("{}", hash(hostname.as_bytes()))
+        }))
+    };
+    static ref HOST_NAME: Arc<RwLock<String>> = {
         Arc::new(RwLock::new({
             let hostname: String = gethostname()
                 .into_string()
