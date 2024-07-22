@@ -7729,7 +7729,7 @@ impl AccountsDb {
         let result = if use_bg_thread_pool {
             let scan_and_hash_pool = rayon::ThreadPoolBuilder::new()
                 .thread_name(|i| format!("solAccountsScanAndHashLo{i:02}"))
-                .num_threads(2)
+                .num_threads(1)
                 .build()
                 .unwrap();
             scan_and_hash_pool.install(scan_and_hash)
