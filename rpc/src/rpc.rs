@@ -3636,7 +3636,7 @@ pub mod rpc_full {
             if !skip_preflight {
                 verify_transaction(&transaction, &preflight_bank.feature_set)?;
 
-                if meta.config.skip_preflight_health_check {
+                if !meta.config.skip_preflight_health_check {
                     match meta.health.check() {
                         RpcHealthStatus::Ok => (),
                         RpcHealthStatus::Unknown => {
