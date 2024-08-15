@@ -7664,6 +7664,9 @@ impl AccountsDb {
         let transient_accounts_hash_cache_path =
             transient_accounts_hash_cache_dir.path().to_path_buf();
         let scan_and_hash = || {
+            sleep(Duration::from_secs(
+                rand::thread_rng().gen_range(0..4 * 60 * 60),
+            ));
             let (cache_hash_data, cache_hash_data_us) = measure_us!(Self::get_cache_hash_data(
                 accounts_hash_cache_path,
                 config,
@@ -12605,6 +12608,8 @@ pub mod tests {
                 epoch_schedule: &EPOCH_SCHEDULE,
                 rent_collector: &RENT_COLLECTOR,
                 store_detailed_debug_info_on_failure: false,
+                scan_and_hash_jitter_seconds: None,
+                scan_and_hash_threads: None,
             }
         }
     }
