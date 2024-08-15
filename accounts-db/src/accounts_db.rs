@@ -12608,8 +12608,6 @@ pub mod tests {
                 epoch_schedule: &EPOCH_SCHEDULE,
                 rent_collector: &RENT_COLLECTOR,
                 store_detailed_debug_info_on_failure: false,
-                scan_and_hash_jitter_seconds: None,
-                scan_and_hash_threads: None,
             }
         }
     }
