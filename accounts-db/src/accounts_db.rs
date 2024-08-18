@@ -7664,8 +7664,12 @@ impl AccountsDb {
         let transient_accounts_hash_cache_path =
             transient_accounts_hash_cache_dir.path().to_path_buf();
         let scan_and_hash = || {
+            let scan_and_hash_delay = rand::thread_rng().gen_range(0..4 * 60 * 60);
+            info!(
+                "calculate_accounts_hash_from_storages: slot: {slot}, scan_and_hash_delay: {scan_and_hash_delay}"
+            );
             sleep(Duration::from_secs(
-                rand::thread_rng().gen_range(0..4 * 60 * 60),
+                scan_and_hash_delay,
             ));
             let (cache_hash_data, cache_hash_data_us) = measure_us!(Self::get_cache_hash_data(
                 accounts_hash_cache_path,
