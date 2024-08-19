@@ -10,10 +10,11 @@
 //!    ALT, RuntimeTransaction<SanitizedMessage> transits into Dynamically Loaded state,
 //!    with its dynamic metadata loaded.
 use {
-    crate::transaction_meta::{DynamicMeta, StaticMeta, TransactionMeta},
-    solana_compute_budget::compute_budget_processor::{
-        process_compute_budget_instructions, ComputeBudgetLimits,
+    crate::{
+        instructions_processor::process_compute_budget_instructions,
+        transaction_meta::{DynamicMeta, StaticMeta, TransactionMeta},
     },
+    solana_compute_budget::compute_budget_limits::ComputeBudgetLimits,
     solana_sdk::{
         hash::Hash,
         message::{AddressLoader, SanitizedMessage, SanitizedVersionedMessage},
@@ -22,6 +23,7 @@ use {
         simple_vote_transaction_checker::is_simple_vote_transaction,
         transaction::{Result, SanitizedVersionedTransaction},
     },
+    solana_svm_transaction::instruction::SVMInstruction,
     std::collections::HashSet,
 };
 
@@ -86,7 +88,11 @@ impl RuntimeTransaction<SanitizedVersionedMessage> {
             compute_unit_price,
             loaded_accounts_bytes,
             ..
-        } = process_compute_budget_instructions(message.program_instructions_iter())?;
+        } = process_compute_budget_instructions(
+            message
+                .program_instructions_iter()
+                .map(|(program_id, ix)| (program_id, SVMInstruction::from(ix))),
+        )?;
         meta.set_compute_unit_limit(compute_unit_limit);
         meta.set_compute_unit_price(compute_unit_price);
         meta.set_loaded_accounts_bytes(loaded_accounts_bytes.get());
