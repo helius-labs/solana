@@ -1,5 +1,3 @@
-use solana_sdk::transaction::TransactionAccountLocks;
-#[cfg(feature = "dev-context-only-utils")]
 use {
     crate::{
         block_error::BlockError,
@@ -57,8 +55,8 @@ use {
         signature::{Keypair, Signature},
         timing,
         transaction::{
-            Result, SanitizedTransaction, TransactionError, TransactionVerificationMode,
-            VersionedTransaction,
+            Result, SanitizedTransaction, TransactionAccountLocks, TransactionError,
+            TransactionVerificationMode, VersionedTransaction,
         },
     },
     solana_transaction_status::token_balances::TransactionTokenBalancesSet,

@@ -43,8 +43,7 @@ use {
         blockstore::Blockstore,
         blockstore_processor::{
             self, BankTransactionExecutor, BankTransactionExecutorHandle, BlockstoreProcessorError,
-            ConfirmationProgress, ExecuteBatchesInternalMetrics, ReplaySlotStats,
-            TransactionStatusSender,
+            ConfirmationProgress, ExecuteBatchesInternalMetrics, TransactionStatusSender,
         },
         entry_notifier_service::EntryNotifierSender,
         leader_schedule_cache::LeaderScheduleCache,
