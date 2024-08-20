@@ -42,7 +42,8 @@ use {
         block_error::BlockError,
         blockstore::Blockstore,
         blockstore_processor::{
-            self, BlockstoreProcessorError, ConfirmationProgress, ExecuteBatchesInternalMetrics,
+            self, BankTransactionExecutor, BankTransactionExecutorHandle, BlockstoreProcessorError,
+            ConfirmationProgress, ExecuteBatchesInternalMetrics, ReplaySlotStats,
             TransactionStatusSender,
         },
         entry_notifier_service::EntryNotifierSender,
@@ -52,6 +53,7 @@ use {
     solana_measure::measure::Measure,
     solana_poh::poh_recorder::{PohLeaderStatus, PohRecorder, GRACE_TICKS_FACTOR, MAX_GRACE_SLOTS},
     solana_program_runtime::timings::ExecuteTimings,
+    solana_rayon_threadlimit::get_thread_count,
     solana_rpc::{
         optimistically_confirmed_bank_tracker::{BankNotification, BankNotificationSenderConfig},
         rpc_subscriptions::RpcSubscriptions,
@@ -552,6 +554,9 @@ impl ReplayStage {
             replay_slots_concurrently,
         } = config;
 
+        let bank_executor =
+            BankTransactionExecutor::new(get_thread_count(), &prioritization_fee_cache);
+
         trace!("replay stage");
         // Start the replay stage loop
         let (lockouts_sender, commitment_service) = AggregateCommitmentService::new(
@@ -678,6 +683,7 @@ impl ReplayStage {
                     replay_slots_concurrently,
                     &prioritization_fee_cache,
                     &mut purge_repair_slot_counter,
+                    &bank_executor,
                 );
                 replay_active_banks_time.stop();
 
@@ -2076,6 +2082,7 @@ impl ReplayStage {
         verify_recyclers: &VerifyRecyclers,
         log_messages_bytes_limit: Option<usize>,
         prioritization_fee_cache: &PrioritizationFeeCache,
+        executor_handle: &BankTransactionExecutorHandle,
     ) -> result::Result<usize, BlockstoreProcessorError> {
         let mut w_replay_stats = replay_stats.write().unwrap();
         let mut w_replay_progress = replay_progress.write().unwrap();
@@ -2096,6 +2103,7 @@ impl ReplayStage {
             false,
             log_messages_bytes_limit,
             prioritization_fee_cache,
+            executor_handle,
         )?;
         let tx_count_after = w_replay_progress.num_txs;
         let tx_count = tx_count_after - tx_count_before;
@@ -2647,6 +2655,7 @@ impl ReplayStage {
         log_messages_bytes_limit: Option<usize>,
         active_bank_slots: &[Slot],
         prioritization_fee_cache: &PrioritizationFeeCache,
+        bank_executor: &BankTransactionExecutor,
     ) -> Vec<ReplaySlotFromBlockstore> {
         // Make mutable shared structures thread safe.
         let progress = RwLock::new(progress);
@@ -2717,6 +2726,8 @@ impl ReplayStage {
                     if bank.collector_id() != my_pubkey {
                         let mut replay_blockstore_time =
                             Measure::start("replay_blockstore_into_bank");
+                        // each thread gets their own handle so results are sent back to the correct place
+                        let executor_handle = bank_executor.handle();
                         let blockstore_result = Self::replay_blockstore_into_bank(
                             &bank,
                             blockstore,
@@ -2728,6 +2739,7 @@ impl ReplayStage {
                             &verify_recyclers.clone(),
                             log_messages_bytes_limit,
                             prioritization_fee_cache,
+                            &executor_handle,
                         );
                         replay_blockstore_time.stop();
                         replay_result.replay_result = Some(blockstore_result);
@@ -2760,6 +2772,7 @@ impl ReplayStage {
         log_messages_bytes_limit: Option<usize>,
         bank_slot: Slot,
         prioritization_fee_cache: &PrioritizationFeeCache,
+        executor_handle: &BankTransactionExecutorHandle,
     ) -> ReplaySlotFromBlockstore {
         let mut replay_result = ReplaySlotFromBlockstore {
             is_slot_dead: false,
@@ -2815,6 +2828,7 @@ impl ReplayStage {
                     &verify_recyclers.clone(),
                     log_messages_bytes_limit,
                     prioritization_fee_cache,
+                    &executor_handle,
                 );
                 replay_blockstore_time.stop();
                 replay_result.replay_result = Some(blockstore_result);
@@ -3108,6 +3122,7 @@ impl ReplayStage {
         replay_slots_concurrently: bool,
         prioritization_fee_cache: &PrioritizationFeeCache,
         purge_repair_slot_counter: &mut PurgeRepairSlotCounter,
+        bank_executor: &BankTransactionExecutor,
     ) -> bool /* completed a bank */ {
         let active_bank_slots = bank_forks.read().unwrap().active_bank_slots();
         let num_active_banks = active_bank_slots.len();
@@ -3132,8 +3147,10 @@ impl ReplayStage {
                     log_messages_bytes_limit,
                     &active_bank_slots,
                     prioritization_fee_cache,
+                    bank_executor,
                 )
             } else {
+                let executor_handle = bank_executor.handle();
                 active_bank_slots
                     .iter()
                     .map(|bank_slot| {
@@ -3151,6 +3168,7 @@ impl ReplayStage {
                             log_messages_bytes_limit,
                             *bank_slot,
                             prioritization_fee_cache,
+                            &executor_handle,
                         )
                     })
                     .collect()
@@ -5020,6 +5038,14 @@ pub(crate) mod tests {
             blockstore.insert_shreds(shreds, None, false).unwrap();
             let block_commitment_cache = Arc::new(RwLock::new(BlockCommitmentCache::default()));
             let exit = Arc::new(AtomicBool::new(false));
+            let replay_tx_thread_pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .thread_name(|i| format!("solReplayTest{i:02}"))
+                .build()
+                .expect("new rayon threadpool");
+
+            let priority_cache = Arc::new(PrioritizationFeeCache::new(0u64));
+            let executor = BankTransactionExecutor::new(1, &priority_cache);
             let res = ReplayStage::replay_blockstore_into_bank(
                 &bank1,
                 &blockstore,
@@ -5030,7 +5056,8 @@ pub(crate) mod tests {
                 &replay_vote_sender,
                 &VerifyRecyclers::default(),
                 None,
-                &PrioritizationFeeCache::new(0u64),
+                &priority_cache,
+                &executor.handle(),
             );
             let max_complete_transaction_status_slot = Arc::new(AtomicU64::default());
             let max_complete_rewards_slot = Arc::new(AtomicU64::default());
