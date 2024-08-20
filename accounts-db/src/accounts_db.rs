@@ -7379,6 +7379,10 @@ impl AccountsDb {
         slot: Slot,
         stats: HashStats,
     ) -> Result<(AccountsHash, /*capitalization*/ u64), AccountsHashVerificationError> {
+        sleep(Duration::from_secs(
+            rand::thread_rng().gen_range(0..4 * 60 * 60),
+        ));
+        datapoint_info!("accounts_db-update_accounts_hash", ("slot", slot, i64),);
         let accounts_hash = self.calculate_accounts_hash_from_storages(config, storages, stats)?;
         let old_accounts_hash = self.set_accounts_hash(slot, accounts_hash);
         if let Some(old_accounts_hash) = old_accounts_hash {
