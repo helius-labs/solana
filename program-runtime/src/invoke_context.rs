@@ -439,6 +439,7 @@ impl<'a> InvokeContext<'a> {
         compute_units_consumed: &mut u64,
         timings: &mut ExecuteTimings,
     ) -> Result<(), InstructionError> {
+        let mut process_instruction_time = Measure::start("process_instruction_time");
         *compute_units_consumed = 0;
         self.transaction_context
             .get_next_instruction_context()?
@@ -454,7 +455,8 @@ impl<'a> InvokeContext<'a> {
             datapoint_error!(
                 "process_executable_chain",
                 ("count", 1, i64),
-                ("instruction_error", reason, String)
+                ("instruction_error", reason, String),
+                ("time", process_instruction_time.as_us() as i64, i64),
             );
         }
         process_result
