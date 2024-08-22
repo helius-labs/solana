@@ -759,7 +759,6 @@ fn process_batches(
         );
         rebatch_and_execute_batches(
             bank,
-            replay_tx_thread_pool,
             batches,
             transaction_status_sender,
             replay_vote_sender,
