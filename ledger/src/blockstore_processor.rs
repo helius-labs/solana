@@ -746,27 +746,27 @@ fn process_batches(
         schedule_batches_for_execution(bank, batches);
         Ok(())
     } else {
-        executor_handle.schedule(
-            bank,
-            batches,
-            transaction_status_sender,
-            replay_vote_sender,
-            log_messages_bytes_limit,
-        )
-        // debug!(
-        //     "process_batches()/rebatch_and_execute_batches({} batches)",
-        //     batches.len()
-        // );
-        // rebatch_and_execute_batches(
+        // executor_handle.schedule(
         //     bank,
-        //     replay_tx_thread_pool,
         //     batches,
         //     transaction_status_sender,
         //     replay_vote_sender,
-        //     batch_execution_timing,
         //     log_messages_bytes_limit,
-        //     prioritization_fee_cache,
         // )
+        debug!(
+            "process_batches()/rebatch_and_execute_batches({} batches)",
+            batches.len()
+        );
+        rebatch_and_execute_batches(
+            bank,
+            replay_tx_thread_pool,
+            batches,
+            transaction_status_sender,
+            replay_vote_sender,
+            batch_execution_timing,
+            log_messages_bytes_limit,
+            prioritization_fee_cache,
+        )
     }
 }
 
