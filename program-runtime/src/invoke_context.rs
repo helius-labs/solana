@@ -444,10 +444,20 @@ impl<'a> InvokeContext<'a> {
             .get_next_instruction_context()?
             .configure(program_indices, instruction_accounts, instruction_data);
         self.push()?;
-        self.process_executable_chain(compute_units_consumed, timings)
+        let process_result = self
+            .process_executable_chain(compute_units_consumed, timings)
             // MUST pop if and only if `push` succeeded, independent of `result`.
             // Thus, the `.and()` instead of an `.and_then()`.
-            .and(self.pop())
+            .and(self.pop());
+        if let Err(err) = process_result.clone() {
+            let reason = err.to_string();
+            datapoint_error!(
+                "process_executable_chain",
+                ("count", 1, i64),
+                ("instruction_error", reason, String)
+            );
+        }
+        process_result
     }
 
     /// Calls the instruction's program entrypoint method
