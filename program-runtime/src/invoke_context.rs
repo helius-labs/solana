@@ -32,7 +32,8 @@ use {
         stable_layout::stable_instruction::StableInstruction,
         sysvar,
         transaction_context::{
-            IndexOfAccount, InstructionAccount, TransactionAccount, TransactionContext,
+            IndexOfAccount, InstructionAccount, InstructionContext, TransactionAccount,
+            TransactionContext,
         },
     },
     std::{
@@ -445,24 +446,29 @@ impl<'a> InvokeContext<'a> {
             .get_next_instruction_context()?
             .configure(program_indices, instruction_accounts, instruction_data);
         self.push()?;
+
+        let instruction_context = self.transaction_context.get_current_instruction_context()?;
+        let program_id = *instruction_context.get_last_program_key(self.transaction_context)?;
         let process_result = self
             .process_executable_chain(compute_units_consumed, timings)
             // MUST pop if and only if `push` succeeded, independent of `result`.
             // Thus, the `.and()` instead of an `.and_then()`.
             .and(self.pop());
+        let mut reason = "none".to_string();
         if let Err(err) = process_result.clone() {
-            let reason = err.to_string();
-            datapoint_error!(
-                "process_executable_chain",
-                "instruction_error" => reason,
-                ("count", 1, i64),
-                (
-                    "process_executable_chain_time",
-                    process_instruction_time.as_us() as i64,
-                    i64
-                ),
-            );
+            reason = err.to_string();
         }
+        datapoint_info!(
+            "process_executable_chain",
+            "instruction_error" => reason,
+            "program_id" => program_id.to_string(),
+            ("count", 1, i64),
+            (
+                "process_executable_chain_time",
+                process_instruction_time.as_us() as i64,
+                i64
+            ),
+        );
         process_result
     }
 
@@ -472,8 +478,10 @@ impl<'a> InvokeContext<'a> {
         compute_units_consumed: &mut u64,
         timings: &mut ExecuteTimings,
     ) -> Result<(), InstructionError> {
-        let instruction_context = self.transaction_context.get_current_instruction_context()?;
         let mut process_executable_chain_time = Measure::start("process_executable_chain_time");
+
+        let instruction_context = self.transaction_context.get_current_instruction_context()?;
+        let program_id = *instruction_context.get_last_program_key(self.transaction_context)?;
 
         let builtin_id = {
             let borrowed_root_account = instruction_context
@@ -503,7 +511,6 @@ impl<'a> InvokeContext<'a> {
         .ok_or(InstructionError::UnsupportedProgramId)?;
         entry.ix_usage_counter.fetch_add(1, Ordering::Relaxed);
 
-        let program_id = *instruction_context.get_last_program_key(self.transaction_context)?;
         self.transaction_context
             .set_return_data(program_id, Vec::new())?;
         let logger = self.get_log_collector();
