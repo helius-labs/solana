@@ -454,24 +454,30 @@ impl<'a> InvokeContext<'a> {
             // MUST pop if and only if `push` succeeded, independent of `result`.
             // Thus, the `.and()` instead of an `.and_then()`.
             .and(self.pop());
-        let mut reason = "none".to_string();
-        let mut error_count = 0;
         if let Err(err) = process_result.clone() {
-            reason = err.to_string();
-            error_count = 1;
+            datapoint_info!(
+                "process_executable_chain_error",
+                "instruction_error" => err.to_string(),
+                "program_id" => program_id.to_string(),
+                ("count", 1, i64),
+                (
+                    "process_executable_chain_time",
+                    process_instruction_time.end_as_us() as i64,
+                    i64
+                ),
+            );
+        } else {
+            datapoint_info!(
+                "process_executable_chain",
+                "program_id" => program_id.to_string(),
+                ("count", 1, i64),
+                (
+                    "process_executable_chain_time",
+                    process_instruction_time.end_as_us() as i64,
+                    i64
+                ),
+            );
         }
-        datapoint_info!(
-            "process_executable_chain",
-            "instruction_error" => reason,
-            "program_id" => program_id.to_string(),
-            ("count", 1, i64),
-            ("error_count", error_count, i64),
-            (
-                "process_executable_chain_time",
-                process_instruction_time.end_as_us() as i64,
-                i64
-            ),
-        );
         process_result
     }
 
