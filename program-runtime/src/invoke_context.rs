@@ -454,9 +454,13 @@ impl<'a> InvokeContext<'a> {
             let reason = err.to_string();
             datapoint_error!(
                 "process_executable_chain",
+                "instruction_error" => reason,
                 ("count", 1, i64),
-                ("instruction_error", reason, String),
-                ("time", process_instruction_time.as_us() as i64, i64),
+                (
+                    "process_executable_chain_time",
+                    process_instruction_time.as_us() as i64,
+                    i64
+                ),
             );
         }
         process_result
