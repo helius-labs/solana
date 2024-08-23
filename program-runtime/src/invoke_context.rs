@@ -468,7 +468,7 @@ impl<'a> InvokeContext<'a> {
             ("error_count", error_count, i64),
             (
                 "process_executable_chain_time",
-                process_instruction_time.as_us() as i64,
+                process_instruction_time.end_as_us() as i64,
                 i64
             ),
         );
