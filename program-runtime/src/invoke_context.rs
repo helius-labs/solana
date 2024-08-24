@@ -613,9 +613,9 @@ impl<'a> InvokeContext<'a> {
             process_executable_chain_time.as_us()
         );
         datapoint_info!(
-            "vm_invoke",
+            "end_fn",
             "program_id" => program_id.to_string(),
-            ("vm_invoke_time", timer.end_as_us() as i64, i64),
+            ("end_fn_time", timer.end_as_us() as i64, i64),
         );
         result
     }
