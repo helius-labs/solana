@@ -468,19 +468,7 @@ impl<'a> InvokeContext<'a> {
             ("error_count", error_count, i64),
             (
                 "process_executable_chain_time",
-                process_instruction_time.as_us() as i64,
-                i64
-            ),
-        );
-        datapoint_info!(
-            "process_executable_chain_",
-            "instruction_error" => reason,
-            "program_id" => program_id.to_string(),
-            ("count", 1, i64),
-            ("error_count", error_count, i64),
-            (
-                "process_executable_chain_time",
-                process_instruction_time.as_us() as i64,
+                process_instruction_time.end_as_us() as i64,
                 i64
             ),
         );
@@ -495,9 +483,18 @@ impl<'a> InvokeContext<'a> {
     ) -> Result<(), InstructionError> {
         let mut process_executable_chain_time = Measure::start("process_executable_chain_time");
 
+        let mut timer = Measure::start("timer");
         let instruction_context = self.transaction_context.get_current_instruction_context()?;
         let program_id = *instruction_context.get_last_program_key(self.transaction_context)?;
-
+        datapoint_info!(
+            "get_current_instruction_context",
+            (
+                "get_current_instruction_context_time",
+                timer.end_as_us() as i64,
+                i64
+            ),
+        );
+        timer = Measure::start("timer");
         let builtin_id = {
             let borrowed_root_account = instruction_context
                 .try_borrow_program_account(self.transaction_context, 0)
@@ -509,7 +506,12 @@ impl<'a> InvokeContext<'a> {
                 *owner_id
             }
         };
+        datapoint_info!(
+            "builtin_id",
+            ("builtin_id_time", timer.end_as_us() as i64, i64),
+        );
 
+        timer = Measure::start("timer");
         // The Murmur3 hash value (used by RBPF) of the string "entrypoint"
         const ENTRYPOINT_KEY: u32 = 0x71E3CF81;
         let entry = self
@@ -526,6 +528,12 @@ impl<'a> InvokeContext<'a> {
         .ok_or(InstructionError::UnsupportedProgramId)?;
         entry.ix_usage_counter.fetch_add(1, Ordering::Relaxed);
 
+        datapoint_info!(
+            "lookup_program",
+            ("lookup_program_time", timer.end_as_us() as i64, i64),
+        );
+
+        timer = Measure::start("timer");
         self.transaction_context
             .set_return_data(program_id, Vec::new())?;
         let logger = self.get_log_collector();
@@ -537,6 +545,12 @@ impl<'a> InvokeContext<'a> {
         let mock_config = Config::default();
         let empty_memory_mapping =
             MemoryMapping::new(Vec::new(), &mock_config, &SBPFVersion::V1).unwrap();
+
+        datapoint_info!(
+            "set_return_data",
+            ("set_return_data_time", timer.end_as_us() as i64, i64),
+        );
+        timer = Measure::start("timer");
         let mut vm = EbpfVm::new(
             self.programs_loaded_for_tx_batch
                 .environments
@@ -548,7 +562,13 @@ impl<'a> InvokeContext<'a> {
             empty_memory_mapping,
             0,
         );
+        datapoint_info!("new_vm", ("new_vm_time", timer.end_as_us() as i64, i64),);
+        timer = Measure::start("timer");
         vm.invoke_function(function);
+        datapoint_info!(
+            "vm_invoke",
+            ("vm_invoke_time", timer.end_as_us() as i64, i64),
+        );
         let result = match vm.program_result {
             ProgramResult::Ok(_) => {
                 stable_log::program_success(&logger, &program_id);
