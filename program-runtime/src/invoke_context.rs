@@ -457,11 +457,23 @@ impl<'a> InvokeContext<'a> {
         let mut reason = "none".to_string();
         let mut error_count = 0;
         if let Err(err) = process_result.clone() {
-            reason = err.to_string();
+            reason = err.to_string().replace(" ", "");
             error_count = 1;
         }
         datapoint_info!(
             "process_executable_chain",
+            "instruction_error" => reason,
+            "program_id" => program_id.to_string(),
+            ("count", 1, i64),
+            ("error_count", error_count, i64),
+            (
+                "process_executable_chain_time",
+                process_instruction_time.as_us() as i64,
+                i64
+            ),
+        );
+        datapoint_info!(
+            "process_executable_chain_",
             "instruction_error" => reason,
             "program_id" => program_id.to_string(),
             ("count", 1, i64),
