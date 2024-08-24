@@ -488,6 +488,7 @@ impl<'a> InvokeContext<'a> {
         let program_id = *instruction_context.get_last_program_key(self.transaction_context)?;
         datapoint_info!(
             "get_current_instruction_context",
+            "program_id" => program_id.to_string(),
             (
                 "get_current_instruction_context_time",
                 timer.end_as_us() as i64,
@@ -508,6 +509,7 @@ impl<'a> InvokeContext<'a> {
         };
         datapoint_info!(
             "builtin_id",
+            "program_id" => program_id.to_string(),
             ("builtin_id_time", timer.end_as_us() as i64, i64),
         );
 
@@ -530,6 +532,7 @@ impl<'a> InvokeContext<'a> {
 
         datapoint_info!(
             "lookup_program",
+            "program_id" => program_id.to_string(),
             ("lookup_program_time", timer.end_as_us() as i64, i64),
         );
 
@@ -548,6 +551,7 @@ impl<'a> InvokeContext<'a> {
 
         datapoint_info!(
             "set_return_data",
+            "program_id" => program_id.to_string(),
             ("set_return_data_time", timer.end_as_us() as i64, i64),
         );
         timer = Measure::start("timer");
@@ -562,13 +566,16 @@ impl<'a> InvokeContext<'a> {
             empty_memory_mapping,
             0,
         );
-        datapoint_info!("new_vm", ("new_vm_time", timer.end_as_us() as i64, i64),);
+        datapoint_info!("new_vm", 
+        "program_id" => program_id.to_string(),("new_vm_time", timer.end_as_us() as i64, i64),);
         timer = Measure::start("timer");
         vm.invoke_function(function);
         datapoint_info!(
             "vm_invoke",
+            "program_id" => program_id.to_string(),
             ("vm_invoke_time", timer.end_as_us() as i64, i64),
         );
+        timer = Measure::start("timer");
         let result = match vm.program_result {
             ProgramResult::Ok(_) => {
                 stable_log::program_success(&logger, &program_id);
@@ -604,6 +611,11 @@ impl<'a> InvokeContext<'a> {
                 .process_instructions
                 .process_executable_chain_us,
             process_executable_chain_time.as_us()
+        );
+        datapoint_info!(
+            "vm_invoke",
+            "program_id" => program_id.to_string(),
+            ("vm_invoke_time", timer.end_as_us() as i64, i64),
         );
         result
     }
