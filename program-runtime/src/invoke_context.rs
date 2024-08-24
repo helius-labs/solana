@@ -449,11 +449,12 @@ impl<'a> InvokeContext<'a> {
 
         let instruction_context = self.transaction_context.get_current_instruction_context()?;
         let program_id = *instruction_context.get_last_program_key(self.transaction_context)?;
-        let process_result = self
-            .process_executable_chain(compute_units_consumed, timings)
-            // MUST pop if and only if `push` succeeded, independent of `result`.
-            // Thus, the `.and()` instead of an `.and_then()`.
-            .and(self.pop());
+        let process_result: Result<(), InstructionError> = Ok(());
+        // let process_result = self
+        //     .process_executable_chain(compute_units_consumed, timings)
+        //     // MUST pop if and only if `push` succeeded, independent of `result`.
+        //     // Thus, the `.and()` instead of an `.and_then()`.
+        //     .and(self.pop());
         if let Err(err) = process_result.clone() {
             datapoint_info!(
                 "process_executable_chain_error",
