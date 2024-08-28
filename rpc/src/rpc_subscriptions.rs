@@ -757,6 +757,18 @@ impl RpcSubscriptions {
 
     fn enqueue_notification(&self, notification_entry: NotificationEntry) {
         if let Some(ref notification_sender) = self.notification_sender {
+            let queue_size = notification_sender.len();
+            let max_capacity = notification_sender.capacity();
+            datapoint_info!(
+                "rpc_pubsub_queue",
+                ("size", queue_size, i64),
+                (
+                    "remaining_capacity",
+                    max_capacity.unwrap_or(usize::MAX) - queue_size,
+                    i64
+                )
+            );
+
             match notification_sender.send(notification_entry.into()) {
                 Ok(()) => (),
                 Err(SendError(notification)) => {
