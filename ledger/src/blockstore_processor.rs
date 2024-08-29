@@ -660,8 +660,8 @@ fn execute_batches_internal(
         batches
             .into_par_iter()
             .map(|transaction_batch| {
-                let transaction_count =
-                    transaction_batch.batch.sanitized_transactions().len() as u64;
+                // let transaction_count =
+                //     transaction_batch.batch.sanitized_transactions().len() as u64;
                 let mut timings = ExecuteTimings::default();
                 execute_batch(
                     transaction_batch,
