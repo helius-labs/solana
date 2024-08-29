@@ -663,50 +663,58 @@ fn execute_batches_internal(
                 let transaction_count =
                     transaction_batch.batch.sanitized_transactions().len() as u64;
                 let mut timings = ExecuteTimings::default();
-                let (result, execute_batches_time): (Result<()>, Measure) = measure!(
-                    {
-                        execute_batch(
-                            transaction_batch,
-                            bank,
-                            transaction_status_sender,
-                            replay_vote_sender,
-                            &mut timings,
-                            log_messages_bytes_limit,
-                            prioritization_fee_cache,
-                        )
-                    },
-                    "execute_batch",
-                );
+                execute_batch(
+                    transaction_batch,
+                    bank,
+                    transaction_status_sender,
+                    replay_vote_sender,
+                    &mut timings,
+                    log_messages_bytes_limit,
+                    prioritization_fee_cache,
+                )
+                // let (result, execute_batches_time): (Result<()>, Measure) = measure!(
+                //     {
 
-                let thread_index = PAR_THREAD_POOL.current_thread_index().unwrap();
-                execution_timings_per_thread
-                    .lock()
-                    .unwrap()
-                    .entry(thread_index)
-                    .and_modify(|thread_execution_time| {
-                        let ThreadExecuteTimings {
-                            total_thread_us,
-                            total_transactions_executed,
-                            execute_timings: total_thread_execute_timings,
-                        } = thread_execution_time;
-                        *total_thread_us += execute_batches_time.as_us();
-                        *total_transactions_executed += transaction_count;
-                        total_thread_execute_timings
-                            .saturating_add_in_place(ExecuteTimingType::TotalBatchesLen, 1);
-                        total_thread_execute_timings.accumulate(&timings);
-                    })
-                    .or_insert(ThreadExecuteTimings {
-                        total_thread_us: execute_batches_time.as_us(),
-                        total_transactions_executed: transaction_count,
-                        execute_timings: timings,
-                    });
-                result
+                //     },
+                //     "execute_batch",
+                // );
+
+                // let thread_index = PAR_THREAD_POOL.current_thread_index().unwrap();
+                // execution_timings_per_thread
+                //     .lock()
+                //     .unwrap()
+                //     .entry(thread_index)
+                //     .and_modify(|thread_execution_time| {
+                //         let ThreadExecuteTimings {
+                //             total_thread_us,
+                //             total_transactions_executed,
+                //             execute_timings: total_thread_execute_timings,
+                //         } = thread_execution_time;
+                //         *total_thread_us += execute_batches_time.as_us();
+                //         *total_transactions_executed += transaction_count;
+                //         total_thread_execute_timings
+                //             .saturating_add_in_place(ExecuteTimingType::TotalBatchesLen, 1);
+                //         total_thread_execute_timings.accumulate(&timings);
+                //     })
+                //     .or_insert(ThreadExecuteTimings {
+                //         total_thread_us: execute_batches_time.as_us(),
+                //         total_transactions_executed: transaction_count,
+                //         execute_timings: timings,
+                //     });
+                // result
             })
             .collect()
     });
     execute_batches_elapsed.stop();
 
-    first_err(&results)?;
+    let err = first_err(&results);
+    let err_count = if err.is_err() { 1 } else { 0 };
+    datapoint_info!(
+        "execute_batches_internal",
+        ("batch_size", batches.len(), i64),
+        ("err_count", err_count, i64)
+    );
+    err?;
 
     Ok(ExecuteBatchesInternalMetrics {
         execution_timings_per_thread: execution_timings_per_thread.into_inner().unwrap(),
