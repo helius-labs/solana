@@ -406,7 +406,7 @@ async fn handle_connection(
                             sender.send_text(&*json).await?;
                         }
                         let send_time = time.elapsed().as_micros();
-                        datapoint_info!("rpc-pubsub-broadcast-receive-send-us", ("time", send_time, i64));
+                        datapoint_info!("rpc-pubsub-broadcast-receive-send-us", ("send_time", send_time, i64));
                     },
                     _ = &mut tripwire => {
                         warn!("disconnecting websocket client: shutting down");

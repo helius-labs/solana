@@ -318,7 +318,7 @@ impl RpcNotifier {
         let send_time = time.elapsed().as_micros();
         datapoint_info!(
             "rpc-pubsub-broadcast-send-time-us",
-            ("time", send_time, i64)
+            ("send_time", send_time, i64)
         );
 
         inc_new_counter_info!("rpc-pubsub-messages", 1);
