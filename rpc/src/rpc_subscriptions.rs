@@ -313,7 +313,10 @@ impl RpcNotifier {
         };
         // There is an unlikely case where this can fail: if the last subscription is closed
         // just as the notifier generates a notification for it.
+        let time = Instant::now();
         let _ = self.sender.send(notification);
+        let send_time = time.elapsed().as_micros();
+        datapoint_info!("rpc-pubsub-send-time-us", ("time", send_time, i64));
 
         inc_new_counter_info!("rpc-pubsub-messages", 1);
         inc_new_counter_info!("rpc-pubsub-bytes", buf_arc.len());
