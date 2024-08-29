@@ -25,6 +25,7 @@ use {
     },
     stream_cancel::{Trigger, Tripwire},
     thiserror::Error,
+    tokio::time::Instant,
     tokio::{net::TcpStream, pin, select, sync::broadcast},
     tokio_util::compat::TokioAsyncReadCompatExt,
 };
@@ -399,11 +400,13 @@ async fn handle_connection(
                         Err(err) => return Err(err.into()),
                     },
                     result = broadcast_receiver.recv() => {
-
+                        let time = Instant::now();
                         // In both possible error cases (closed or lagged) we disconnect the client.
                         if let Some(json) = broadcast_handler.handle(result?)? {
                             sender.send_text(&*json).await?;
                         }
+                        let send_time = time.elapsed().as_micros();
+                        datapoint_info!("rpc-pubsub-broadcast-receive-send-us", ("time", send_time, i64));
                     },
                     _ = &mut tripwire => {
                         warn!("disconnecting websocket client: shutting down");

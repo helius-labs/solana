@@ -316,7 +316,10 @@ impl RpcNotifier {
         let time = Instant::now();
         let _ = self.sender.send(notification);
         let send_time = time.elapsed().as_micros();
-        datapoint_info!("rpc-pubsub-send-time-us", ("time", send_time, i64));
+        datapoint_info!(
+            "rpc-pubsub-broadcast-send-time-us",
+            ("time", send_time, i64)
+        );
 
         inc_new_counter_info!("rpc-pubsub-messages", 1);
         inc_new_counter_info!("rpc-pubsub-bytes", buf_arc.len());
