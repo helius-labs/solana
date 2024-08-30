@@ -413,7 +413,7 @@ async fn handle_connection(
                         Err(err) => return Err(err.into()),
                     },
                     result = broadcast_receiver.recv() => {
-                        let time = Instant::now();
+                        let time = std::time::Instant::now();
                         // In both possible error cases (closed or lagged) we disconnect the client.
                         if let Some(json) = broadcast_handler.handle(result?)? {
                             if let Err(_) = tokio::time::timeout(std::time::Duration::from_secs(2), sender.send_text(&*json)).await {
@@ -438,7 +438,17 @@ async fn handle_connection(
         };
 
         if let Some(response) = json_rpc_handler.handle_request(data_str).await {
-            sender.send_text(&response).await?;
+            if let Err(_) = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                sender.send_text(&*response),
+            )
+            .await
+            {
+                datapoint_info!(
+                    "rpc-pubsub-broadcast-send-fallback-timeout",
+                    ("count", 1, i64)
+                );
+            }
         }
         data.clear();
     }
