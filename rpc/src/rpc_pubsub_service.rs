@@ -406,11 +406,13 @@ async fn handle_connection(
                     result = broadcast_receiver.recv() => {
 
                         // In both possible error cases (closed or lagged) we disconnect the client.
+                        let time = std::time::Instant::now();
                         if let Some(json) = broadcast_handler.handle(result?)? {
                             if let Err(_) = tokio::time::timeout(std::time::Duration::from_secs(2), sender.send_text(&*json)).await {
                                 datapoint_info!("rpc-pubsub-broadcast-send-timeout", ("count", 1, i64));
                             }
                         }
+                        datapoint_info!("rpc-pubsub-broadcast-client", ("time_us", time.elapsed().as_micros() as i64, i64));
                     },
                     _ = &mut tripwire => {
                         warn!("disconnecting websocket client: shutting down");
