@@ -407,7 +407,9 @@ async fn handle_connection(
 
                         // In both possible error cases (closed or lagged) we disconnect the client.
                         if let Some(json) = broadcast_handler.handle(result?)? {
-                            sender.send_text(&*json).await?;
+                            if let Err(_) = tokio::time::timeout(std::time::Duration::from_secs(2), sender.send_text(&*json)).await {
+                                datapoint_info!("rpc-pubsub-broadcast-send-timeout", ("count", 1, i64));
+                            }
                         }
                     },
                     _ = &mut tripwire => {
