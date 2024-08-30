@@ -272,11 +272,20 @@ impl BroadcastHandler {
             if notification.is_final {
                 entry.remove();
             }
-            notification
+            let notification_json = notification
                 .json
                 .upgrade()
                 .ok_or(Error::NotificationIsGone)
-                .map(Some)
+                .map(Some);
+
+            if notification.created_at.elapsed() > std::time::Duration::from_secs(10) {
+                info!(
+                    "slow notification: {:?}, payload: {:?}",
+                    notification.created_at.elapsed(),
+                    notification_json
+                );
+            }
+            notification_json
         } else {
             Ok(None)
         }
