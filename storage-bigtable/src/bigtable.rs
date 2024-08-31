@@ -874,6 +874,7 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
         table_name: &str,
         request: ReadRowsRequest,
     ) -> Result<tonic::Response<tonic::Streaming<ReadRowsResponse>>> {
+        let start = Instant::now();
         let datapoint_bigtable = if table_name == "blocks" {
             "bigtable_blocks"
         } else if table_name == "tx" {
@@ -891,6 +892,13 @@ impl<F: FnMut(Request<()>) -> InterceptedRequestResult> BigTable<F> {
             self.client.read_rows(request),
         )
         .await
+        .map(|res| {
+            datapoint_info!(
+                datapoint_bigtable,
+                ("read_rows_duration_ms", start.elapsed().as_millis(), i64)
+            );
+            res
+        })
         .map_err(|_| {
             datapoint_error!(datapoint_bigtable, ("timeout", 1, i64));
             Error::Timeout
