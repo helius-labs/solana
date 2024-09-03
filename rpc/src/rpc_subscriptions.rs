@@ -208,62 +208,8 @@ struct RpcNotificationContext {
 
 const RPC_NOTIFICATIONS_METRICS_SUBMISSION_INTERVAL_MS: Duration = Duration::from_millis(2_000);
 
-struct RecentItems {
-    queue: VecDeque<Arc<String>>,
-    total_bytes: usize,
-    max_len: usize,
-    max_total_bytes: usize,
-    last_metrics_submission: Instant,
-}
-
-impl RecentItems {
-    fn new(max_len: usize, max_total_bytes: usize) -> Self {
-        Self {
-            queue: VecDeque::new(),
-            total_bytes: 0,
-            max_len,
-            max_total_bytes,
-            last_metrics_submission: Instant::now(),
-        }
-    }
-
-    fn push(&mut self, item: Arc<String>) {
-        self.total_bytes = self
-            .total_bytes
-            .checked_add(item.len())
-            .expect("total bytes overflow");
-        self.queue.push_back(item);
-
-        while self.total_bytes > self.max_total_bytes || self.queue.len() > self.max_len {
-            let item = self.queue.pop_front().expect("can't be empty");
-            self.total_bytes = self
-                .total_bytes
-                .checked_sub(item.len())
-                .expect("total bytes underflow");
-        }
-
-        let now = Instant::now();
-        let last_metrics_ago = now.duration_since(self.last_metrics_submission);
-        if last_metrics_ago > RPC_NOTIFICATIONS_METRICS_SUBMISSION_INTERVAL_MS {
-            datapoint_info!(
-                "rpc_subscriptions_recent_items",
-                ("num", self.queue.len(), i64),
-                ("total_bytes", self.total_bytes, i64),
-            );
-            self.last_metrics_submission = now;
-        } else {
-            trace!(
-                "rpc_subscriptions_recent_items num={} total_bytes={}",
-                self.queue.len(),
-                self.total_bytes,
-            );
-        }
-    }
-}
-
 struct RpcNotifier {
     sender: broadcast::Sender<RpcNotification>,
-    recent_items: Mutex<RecentItems>,
 }
 
 thread_local! {
@@ -315,10 +261,9 @@ impl RpcNotifier {
         // just as the notifier generates a notification for it.
         let _ = self.sender.send(notification);
 
+        inc_new_counter_info!("rpc-pubsub-broadcast-queue-len", self.sender.len());
         inc_new_counter_info!("rpc-pubsub-messages", 1);
         inc_new_counter_info!("rpc-pubsub-bytes", buf_arc.len());
-
-        self.recent_items.lock().unwrap().push(buf_arc);
     }
 }
 
@@ -626,10 +571,6 @@ impl RpcSubscriptions {
 
         let notifier = RpcNotifier {
             sender: broadcast_sender.clone(),
-            recent_items: Mutex::new(RecentItems::new(
-                config.queue_capacity_items,
-                config.queue_capacity_bytes,
-            )),
         };
 
         let t_cleanup = config.notification_threads.map(|notification_threads| {
