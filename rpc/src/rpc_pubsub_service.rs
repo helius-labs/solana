@@ -389,6 +389,8 @@ async fn handle_connection(
     );
     json_rpc_handler.extend_with(rpc_impl.to_delegate());
     let broadcast_handler = BroadcastHandler::new(current_subscriptions);
+    let notification_count = AtomicUsize::new(0);
+    let mut notification_count_window = std::time::Instant::now();
     loop {
         // Extra block for dropping `receive_future`.
         {
@@ -407,6 +409,12 @@ async fn handle_connection(
 
                         // In both possible error cases (closed or lagged) we disconnect the client.
                         if let Some(json) = broadcast_handler.handle(result?)? {
+                            let cur_count = notification_count.fetch_add(1, Ordering::Relaxed);
+                            if notification_count_window.elapsed().as_secs() > 1 {
+                                let rate = cur_count as u64 / notification_count_window.elapsed().as_secs();
+                                notification_count_window = std::time::Instant::now();
+                                datapoint_info!("rpc-pubsub-broadcast-send-rate", ("rate", rate, i64));
+                            }
                             sender.send_text(&*json).await?;
                         }
                     },
