@@ -408,6 +408,7 @@ async fn handle_connection(
                             if notification_count_window.elapsed().as_secs() > 1 {
                                 let rate = cur_count as u64 / notification_count_window.elapsed().as_secs();
                                 notification_count_window = std::time::Instant::now();
+                                notification_count.store(0, Ordering::Relaxed);
                                 datapoint_info!("rpc-pubsub-broadcast-send-rate", ("rate", rate, i64));
                             }
                             sender.send_text(&*json).await?;
