@@ -356,6 +356,8 @@ enum Error {
     NotificationIsGone,
     #[error("exceeded max notification rate of 1500 notifications per second")]
     MaxNotificationRateExceeded,
+    #[error("client didn't respoind in time")]
+    ClientTimeout,
 }
 
 async fn handle_connection(
@@ -415,7 +417,10 @@ async fn handle_connection(
                                 notification_count = 0;
                                 datapoint_info!("rpc-pubsub-broadcast-send-rate", ("rate", rate, i64));
                             }
-                            sender.send_text(&*json).await?;
+                            if let Err(_) = tokio::time::timeout(std::time::Duration::from_secs(2), sender.send_text(&*json)).await {
+                                datapoint_info!("rpc-pubsub-client-send-timeout", ("count", 1, i64));
+                                return Err(Error::ClientTimeout);
+                            }
                         }
                     },
                     _ = &mut tripwire => {

@@ -4,7 +4,7 @@ use {
     crate::{
         optimistically_confirmed_bank_tracker::OptimisticallyConfirmedBank,
         parsed_token_accounts::{get_parsed_token_account, get_parsed_token_accounts},
-        rpc_pubsub_service::PubSubConfig,
+        rpc_pubsub_service::{PubSubConfig, DEFAULT_QUEUE_CAPACITY_ITEMS},
         rpc_subscription_tracker::{
             AccountSubscriptionParams, BlockSubscriptionKind, BlockSubscriptionParams,
             LogsSubscriptionKind, LogsSubscriptionParams, ProgramSubscriptionParams,
@@ -259,6 +259,10 @@ impl RpcNotifier {
         };
         // There is an unlikely case where this can fail: if the last subscription is closed
         // just as the notifier generates a notification for it.
+        if self.sender.len() > DEFAULT_QUEUE_CAPACITY_ITEMS {
+            datapoint_info!("rpc-pubsub-broadcast-queue-len-exceeded", ("count", 1, i64));
+            return;
+        }
         let _ = self.sender.send(notification);
 
         inc_new_counter_info!("rpc-pubsub-broadcast-queue-len", self.sender.len());
