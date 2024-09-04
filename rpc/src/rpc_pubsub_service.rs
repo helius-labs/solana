@@ -354,6 +354,8 @@ enum Error {
     Broadcast(#[from] broadcast::error::RecvError),
     #[error("client has lagged behind (notification is gone)")]
     NotificationIsGone,
+    #[error("exceeded max notification rate of 1500 notifications per second")]
+    MaxNotificationRateExceeded,
 }
 
 async fn handle_connection(
@@ -406,6 +408,9 @@ async fn handle_connection(
                             notification_count += 1;
                             if notification_count_window.elapsed().as_secs() > 1 {
                                 let rate = notification_count / notification_count_window.elapsed().as_secs();
+                                if rate > 1500 {
+                                    return Err(Error::MaxNotificationRateExceeded);
+                                }
                                 notification_count_window = std::time::Instant::now();
                                 notification_count = 0;
                                 datapoint_info!("rpc-pubsub-broadcast-send-rate", ("rate", rate, i64));
