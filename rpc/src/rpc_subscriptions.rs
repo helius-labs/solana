@@ -175,7 +175,7 @@ where
 pub struct RpcNotification {
     pub subscription_id: SubscriptionId,
     pub is_final: bool,
-    pub json: Weak<String>,
+    pub json: Arc<String>,
     pub created_at: Instant,
 }
 
@@ -253,7 +253,7 @@ impl RpcNotifier {
 
         let notification = RpcNotification {
             subscription_id: subscription.id(),
-            json: Arc::downgrade(&buf_arc),
+            json: buf_arc,
             is_final,
             created_at: Instant::now(),
         };
@@ -263,7 +263,6 @@ impl RpcNotifier {
 
         inc_new_counter_info!("rpc-pubsub-broadcast-queue-len", self.sender.len());
         inc_new_counter_info!("rpc-pubsub-messages", 1);
-        inc_new_counter_info!("rpc-pubsub-bytes", buf_arc.len());
     }
 }
 
