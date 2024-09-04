@@ -417,7 +417,7 @@ async fn handle_connection(
                                 notification_count = 0;
                                 datapoint_info!("rpc-pubsub-broadcast-send-rate", ("rate", rate, i64));
                             }
-                            if let Err(_) = tokio::time::timeout(std::time::Duration::from_secs(2), sender.send_text(&*json)).await {
+                            if let Err(_) = tokio::time::timeout(std::time::Duration::from_millis(500), sender.send_text(&*json)).await {
                                 datapoint_info!("rpc-pubsub-client-send-timeout", ("count", 1, i64));
                                 return Err(Error::ClientTimeout);
                             }
