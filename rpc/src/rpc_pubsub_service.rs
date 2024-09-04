@@ -36,7 +36,7 @@ pub const DEFAULT_QUEUE_CAPACITY_ITEMS: usize = 10_000_000;
 pub const DEFAULT_TEST_QUEUE_CAPACITY_ITEMS: usize = 100;
 pub const DEFAULT_QUEUE_CAPACITY_BYTES: usize = 256 * 1024 * 1024;
 pub const DEFAULT_WORKER_THREADS: usize = 1;
-
+pub const DEFAULT_MAX_NOTIFICATION_RATE: u64 = 1000;
 #[derive(Debug, Clone)]
 pub struct PubSubConfig {
     pub enable_block_subscription: bool,
@@ -46,6 +46,7 @@ pub struct PubSubConfig {
     pub queue_capacity_bytes: usize,
     pub worker_threads: usize,
     pub notification_threads: Option<NonZeroUsize>,
+    pub max_notification_rate: u64,
 }
 
 impl Default for PubSubConfig {
@@ -58,6 +59,7 @@ impl Default for PubSubConfig {
             queue_capacity_bytes: DEFAULT_QUEUE_CAPACITY_BYTES,
             worker_threads: DEFAULT_WORKER_THREADS,
             notification_threads: NonZeroUsize::new(get_thread_count()),
+            max_notification_rate: DEFAULT_MAX_NOTIFICATION_RATE,
         }
     }
 }
@@ -72,6 +74,7 @@ impl PubSubConfig {
             queue_capacity_bytes: DEFAULT_QUEUE_CAPACITY_BYTES,
             worker_threads: DEFAULT_WORKER_THREADS,
             notification_threads: NonZeroUsize::new(2),
+            max_notification_rate: DEFAULT_MAX_NOTIFICATION_RATE,
         }
     }
 }
@@ -360,6 +363,8 @@ enum Error {
     Broadcast(#[from] broadcast::error::RecvError),
     #[error("client has lagged behind (notification is gone)")]
     NotificationIsGone,
+    #[error("exceeded max notification rate")]
+    MaxNotificationRate,
 }
 
 async fn handle_connection(
