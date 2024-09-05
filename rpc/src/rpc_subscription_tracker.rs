@@ -343,7 +343,7 @@ impl SubscriptionInfo {
             SubscriptionParams::Account(params) => format!("account:{}", params.pubkey.to_string()),
             SubscriptionParams::Logs(params) => format!("logs:{}", params.kind.to_string()),
             SubscriptionParams::Program(params) => format!("program:{}", params.pubkey.to_string()),
-            SubscriptionParams::Signature(params) => "signature".to_string(),
+            SubscriptionParams::Signature(_) => "signature".to_string(),
             SubscriptionParams::Slot => "slot".to_string(),
             SubscriptionParams::SlotsUpdates => "slots_updates".to_string(),
             SubscriptionParams::Root => "root".to_string(),

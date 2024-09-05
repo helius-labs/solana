@@ -437,7 +437,7 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
             data_slice,
             encoding: encoding.unwrap_or(UiAccountEncoding::Binary),
         };
-        datapoint_info!("rpc-pubsub-program-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
+        datapoint_info!("rpc-pubsub-account-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
         self.subscribe(SubscriptionParams::Account(params))
     }
 
