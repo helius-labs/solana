@@ -267,6 +267,7 @@ impl BroadcastHandler {
             if notification.is_final {
                 entry.remove();
             }
+            datapoint_info!("rpc_pubsub_notification_with_identifier", "identifier" => notification.identifier, ("count", 1, i64));
             notification
                 .json
                 .upgrade()

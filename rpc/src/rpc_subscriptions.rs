@@ -174,7 +174,6 @@ where
 #[derive(Debug, Clone)]
 pub struct RpcNotification {
     pub subscription_id: SubscriptionId,
-    pub method: String,
     pub identifier: String,
     pub is_final: bool,
     pub json: Weak<String>,
@@ -255,7 +254,6 @@ impl RpcNotifier {
 
         let notification = RpcNotification {
             subscription_id: subscription.id(),
-            method: subscription.method().to_string(),
             identifier: subscription.identifier().to_string(),
             json: Arc::downgrade(&buf_arc),
             is_final,
