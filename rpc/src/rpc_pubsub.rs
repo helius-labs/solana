@@ -437,6 +437,7 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
             data_slice,
             encoding: encoding.unwrap_or(UiAccountEncoding::Binary),
         };
+        datapoint_info!("rpc-pubsub-program-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
         self.subscribe(SubscriptionParams::Account(params))
     }
 
@@ -461,6 +462,7 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
             commitment: config.account_config.commitment.unwrap_or_default(),
             with_context: config.with_context.unwrap_or_default(),
         };
+        datapoint_info!("rpc-pubsub-program-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
         self.subscribe(SubscriptionParams::Program(params))
     }
 
@@ -473,23 +475,26 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
         filter: RpcTransactionLogsFilter,
         config: Option<RpcTransactionLogsConfig>,
     ) -> Result<SubscriptionId> {
-        let params = LogsSubscriptionParams {
-            kind: match filter {
-                RpcTransactionLogsFilter::All => LogsSubscriptionKind::All,
-                RpcTransactionLogsFilter::AllWithVotes => LogsSubscriptionKind::AllWithVotes,
-                RpcTransactionLogsFilter::Mentions(keys) => {
-                    if keys.len() != 1 {
-                        return Err(Error {
-                            code: ErrorCode::InvalidParams,
-                            message: "Invalid Request: Only 1 address supported".into(),
-                            data: None,
-                        });
-                    }
-                    LogsSubscriptionKind::Single(param::<Pubkey>(&keys[0], "mentions")?)
+        let kind = match filter {
+            RpcTransactionLogsFilter::All => LogsSubscriptionKind::All,
+            RpcTransactionLogsFilter::AllWithVotes => LogsSubscriptionKind::AllWithVotes,
+            RpcTransactionLogsFilter::Mentions(keys) => {
+                if keys.len() != 1 {
+                    return Err(Error {
+                        code: ErrorCode::InvalidParams,
+                        message: "Invalid Request: Only 1 address supported".into(),
+                        data: None,
+                    });
                 }
-            },
+                LogsSubscriptionKind::Single(param::<Pubkey>(&keys[0], "mentions")?)
+            }
+        };
+        let kind_string = kind.to_string();
+        let params = LogsSubscriptionParams {
+            kind,
             commitment: config.and_then(|c| c.commitment).unwrap_or_default(),
         };
+        datapoint_info!("rpc-pubsub-logs-subscribe", "kind" => kind_string, ("count", 1, i64));
         self.subscribe(SubscriptionParams::Logs(params))
     }
 

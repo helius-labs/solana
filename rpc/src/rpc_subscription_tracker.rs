@@ -159,6 +159,16 @@ pub enum LogsSubscriptionKind {
     Single(Pubkey),
 }
 
+impl ToString for LogsSubscriptionKind {
+    fn to_string(&self) -> String {
+        match self {
+            LogsSubscriptionKind::All => "all".to_string(),
+            LogsSubscriptionKind::AllWithVotes => "allWithVotes".to_string(),
+            LogsSubscriptionKind::Single(pubkey) => pubkey.to_string(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProgramSubscriptionParams {
     pub pubkey: Pubkey,
@@ -326,6 +336,20 @@ pub struct SubscriptionInfo {
 impl SubscriptionInfo {
     pub fn id(&self) -> SubscriptionId {
         self.id
+    }
+
+    pub fn identifier(&self) -> String {
+        match &self.params {
+            SubscriptionParams::Account(params) => format!("account:{}", params.pubkey.to_string()),
+            SubscriptionParams::Logs(params) => format!("logs:{}", params.kind.to_string()),
+            SubscriptionParams::Program(params) => format!("program:{}", params.pubkey.to_string()),
+            SubscriptionParams::Signature(params) => params.signature.to_string(),
+            SubscriptionParams::Slot => "slot".to_string(),
+            SubscriptionParams::SlotsUpdates => "slots_updates".to_string(),
+            SubscriptionParams::Root => "root".to_string(),
+            SubscriptionParams::Block(_) => "block".to_string(),
+            SubscriptionParams::Vote => "vote".to_string(),
+        }
     }
 
     pub fn method(&self) -> &'static str {
