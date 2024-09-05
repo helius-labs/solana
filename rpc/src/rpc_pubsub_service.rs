@@ -253,7 +253,11 @@ impl BroadcastHandler {
         }
     }
 
-    fn handle(&self, notification: RpcNotification) -> Result<Option<Arc<String>>, Error> {
+    fn handle(
+        &self,
+        api_key: &str,
+        notification: RpcNotification,
+    ) -> Result<Option<Arc<String>>, Error> {
         if let Entry::Occupied(entry) = self
             .current_subscriptions
             .entry(notification.subscription_id)
@@ -267,7 +271,7 @@ impl BroadcastHandler {
             if notification.is_final {
                 entry.remove();
             }
-            datapoint_info!("rpc_pubsub_notification_with_identifier", "identifier" => notification.identifier, ("count", 1, i64));
+            datapoint_info!("rpc_pubsub_notification_with_identifier", "identifier" => notification.identifier, "api_key" => api_key, ("count", 1, i64));
             notification
                 .json
                 .upgrade()
@@ -306,7 +310,11 @@ impl TestBroadcastReceiver {
                         "TestBroadcastReceiver: {:?}ms elapsed",
                         started.elapsed().as_millis()
                     );
-                    if let Some(json) = self.handler.handle(notification).expect("handler failed") {
+                    if let Some(json) = self
+                        .handler
+                        .handle("none", notification)
+                        .expect("handler failed")
+                    {
                         return Ok(json.to_string());
                     }
                 }
@@ -366,6 +374,14 @@ async fn handle_connection(
 ) -> Result<(), Error> {
     let mut server = Server::new(socket.compat());
     let request = server.receive_request().await?;
+    let api_key = url::Url::parse(&format!("http://localhost{}", request.path()))
+        .ok()
+        .and_then(|u| {
+            let mut query_pairs = u.query_pairs();
+            let key = query_pairs.find(|(key, _)| key == "api-key");
+            key.map(|(_, value)| value.to_string())
+        })
+        .unwrap_or("none".to_string());
     let accept = server::Response::Accept {
         key: request.key(),
         protocol: None,
@@ -400,9 +416,8 @@ async fn handle_connection(
                         Err(err) => return Err(err.into()),
                     },
                     result = broadcast_receiver.recv() => {
-
                         // In both possible error cases (closed or lagged) we disconnect the client.
-                        if let Some(json) = broadcast_handler.handle(result?)? {
+                        if let Some(json) = broadcast_handler.handle(api_key.as_str(), result?)? {
                             sender.send_text(&*json).await?;
                         }
                     },

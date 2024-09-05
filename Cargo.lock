@@ -6910,6 +6910,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util 0.6.9",
+ "url 2.5.0",
 ]
 
 [[package]]
