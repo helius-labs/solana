@@ -267,10 +267,11 @@ impl BroadcastHandler {
             if notification.is_final {
                 entry.remove();
             }
-            Ok(Some(notification.json))
-            // .upgrade()
-            // .ok_or(Error::NotificationIsGone)
-            // .map(Some)
+            notification
+                .json
+                .upgrade()
+                .ok_or(Error::NotificationIsGone)
+                .map(Some)
         } else {
             Ok(None)
         }

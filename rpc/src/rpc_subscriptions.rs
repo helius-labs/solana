@@ -175,7 +175,7 @@ where
 pub struct RpcNotification {
     pub subscription_id: SubscriptionId,
     pub is_final: bool,
-    pub json: Arc<String>,
+    pub json: Weak<String>,
     pub created_at: Instant,
 }
 
@@ -208,8 +208,62 @@ struct RpcNotificationContext {
 
 const RPC_NOTIFICATIONS_METRICS_SUBMISSION_INTERVAL_MS: Duration = Duration::from_millis(2_000);
 
+struct RecentItems {
+    queue: VecDeque<Arc<String>>,
+    total_bytes: usize,
+    max_len: usize,
+    max_total_bytes: usize,
+    last_metrics_submission: Instant,
+}
+
+impl RecentItems {
+    fn new(max_len: usize, max_total_bytes: usize) -> Self {
+        Self {
+            queue: VecDeque::new(),
+            total_bytes: 0,
+            max_len,
+            max_total_bytes,
+            last_metrics_submission: Instant::now(),
+        }
+    }
+
+    fn push(&mut self, item: Arc<String>) {
+        self.total_bytes = self
+            .total_bytes
+            .checked_add(item.len())
+            .expect("total bytes overflow");
+        self.queue.push_back(item);
+
+        while self.total_bytes > self.max_total_bytes || self.queue.len() > self.max_len {
+            let item = self.queue.pop_front().expect("can't be empty");
+            self.total_bytes = self
+                .total_bytes
+                .checked_sub(item.len())
+                .expect("total bytes underflow");
+        }
+
+        let now = Instant::now();
+        let last_metrics_ago = now.duration_since(self.last_metrics_submission);
+        if last_metrics_ago > RPC_NOTIFICATIONS_METRICS_SUBMISSION_INTERVAL_MS {
+            datapoint_info!(
+                "rpc_subscriptions_recent_items",
+                ("num", self.queue.len(), i64),
+                ("total_bytes", self.total_bytes, i64),
+            );
+            self.last_metrics_submission = now;
+        } else {
+            trace!(
+                "rpc_subscriptions_recent_items num={} total_bytes={}",
+                self.queue.len(),
+                self.total_bytes,
+            );
+        }
+    }
+}
+
 struct RpcNotifier {
     sender: broadcast::Sender<RpcNotification>,
+    recent_items: Mutex<RecentItems>,
 }
 
 thread_local! {
@@ -253,7 +307,7 @@ impl RpcNotifier {
 
         let notification = RpcNotification {
             subscription_id: subscription.id(),
-            json: buf_arc,
+            json: Arc::downgrade(&buf_arc),
             is_final,
             created_at: Instant::now(),
         };
@@ -267,6 +321,8 @@ impl RpcNotifier {
 
         inc_new_counter_info!("rpc-pubsub-broadcast-queue-len", self.sender.len());
         inc_new_counter_info!("rpc-pubsub-messages", 1);
+
+        self.recent_items.lock().unwrap().push(buf_arc);
     }
 }
 
@@ -574,6 +630,10 @@ impl RpcSubscriptions {
 
         let notifier = RpcNotifier {
             sender: broadcast_sender.clone(),
+            recent_items: Mutex::new(RecentItems::new(
+                config.queue_capacity_items,
+                config.queue_capacity_bytes,
+            )),
         };
         let notification_threads = config.notification_threads.unwrap_or_else(get_thread_count);
         let t_cleanup = if notification_threads == 0 {
