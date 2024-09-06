@@ -376,6 +376,7 @@ async fn handle_connection(
     subscription_control: SubscriptionControl,
     config: PubSubConfig,
     mut tripwire: Tripwire,
+    project_connections: Arc<DashMap<String, usize>>,
 ) -> Result<(), Error> {
     let mut server = Server::new(socket.compat());
     let request = server.receive_request().await?;
@@ -412,6 +413,7 @@ async fn handle_connection(
         config,
         subscription_control,
         Arc::clone(&current_subscriptions),
+        project_connections,
         api_key.clone(),
         project_id.clone(),
         plan.clone(),
@@ -471,6 +473,7 @@ async fn listen(
 ) -> io::Result<()> {
     let listener = tokio::net::TcpListener::bind(&listen_address).await?;
     let counter = TokenCounter::new("rpc_pubsub_connections");
+    let project_connections = Arc::new(DashMap::new());
     loop {
         select! {
             result = listener.accept() => match result {
@@ -482,7 +485,7 @@ async fn listen(
                     let counter_token = counter.create_token();
                     tokio::spawn(async move {
                         let handle = handle_connection(
-                            socket, subscription_control, config, tripwire
+                            socket, subscription_control, config, tripwire, project_connections
                         );
                         match handle.await {
                             Ok(()) => debug!("connection closed ({:?})", addr),
