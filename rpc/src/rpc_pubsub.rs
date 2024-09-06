@@ -360,7 +360,6 @@ pub struct RpcSolPubSubImpl {
     config: PubSubConfig,
     subscription_control: SubscriptionControl,
     current_subscriptions: Arc<DashMap<SubscriptionId, SubscriptionToken>>,
-    project_connections: Arc<DashMap<String, usize>>,
     api_key: String,
     project_id: String,
     plan: String,
@@ -371,7 +370,6 @@ impl RpcSolPubSubImpl {
         config: PubSubConfig,
         subscription_control: SubscriptionControl,
         current_subscriptions: Arc<DashMap<SubscriptionId, SubscriptionToken>>,
-        project_connections: Arc<DashMap<String, usize>>,
         api_key: String,
         project_id: String,
         plan: String,
@@ -380,7 +378,6 @@ impl RpcSolPubSubImpl {
             config,
             subscription_control,
             current_subscriptions,
-            project_connections,
             api_key,
             project_id,
             plan,
@@ -456,23 +453,11 @@ impl RpcSolPubSubImpl {
             })?;
         let id = token.id();
         self.current_subscriptions.insert(id, token);
-        let num_connections = self
-            .project_connections
-            .entry(self.project_id.clone())
-            .and_modify(|count| *count += 1)
-            .or_insert(1);
-        datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => self.project_id, "plan" => self.plan, ("num_connections", *num_connections, i64));
         Ok(id)
     }
 
     fn unsubscribe(&self, id: SubscriptionId) -> Result<bool> {
         if self.current_subscriptions.remove(&id).is_some() {
-            let num_connections = self
-                .project_connections
-                .entry(self.project_id.clone())
-                .and_modify(|count| *count -= 1)
-                .or_insert(0);
-            datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => self.project_id, "plan" => self.plan, ("num_connections", *num_connections, i64));
             Ok(true)
         } else {
             Err(Error {

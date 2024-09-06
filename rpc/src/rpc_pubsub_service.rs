@@ -347,7 +347,6 @@ pub fn test_connection(
         },
         subscriptions.control().clone(),
         Arc::clone(&current_subscriptions),
-        Arc::new(DashMap::new()),
         "none".to_string(),
         "none".to_string(),
         "none".to_string(),
@@ -377,7 +376,6 @@ async fn handle_connection(
     subscription_control: SubscriptionControl,
     config: PubSubConfig,
     mut tripwire: Tripwire,
-    project_connections: Arc<DashMap<String, usize>>,
     project_rates: Arc<DashMap<String, (std::time::Instant, u64)>>,
 ) -> Result<(), Error> {
     let mut server = Server::new(socket.compat());
@@ -403,15 +401,6 @@ async fn handle_connection(
         key: request.key(),
         protocol: None,
     };
-    if let Some(connections) = project_connections.get(&project_id) {
-        if plan.contains("free") {
-            if *connections >= 2 {
-                return Err(Error::Handshake(soketto::handshake::Error::Http(
-                    "Too many connections".into(),
-                )));
-            }
-        }
-    }
     server.send_response(&accept).await?;
     let (mut sender, mut receiver) = server.into_builder().finish();
 
@@ -424,7 +413,6 @@ async fn handle_connection(
         config,
         subscription_control,
         Arc::clone(&current_subscriptions),
-        project_connections,
         api_key.clone(),
         project_id.clone(),
         plan.clone(),
@@ -447,6 +435,7 @@ async fn handle_connection(
                         Err(err) => return Err(err.into()),
                     },
                     result = broadcast_receiver.recv() => {
+                        datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => project_id, "api_key" => api_key, "plan" => plan, ("count", current_subscriptions.len() as i64, i64));
                         let mut limit = false;
                         {
                             project_rates.entry(project_id.clone()).and_modify(|e| {
@@ -504,7 +493,6 @@ async fn listen(
 ) -> io::Result<()> {
     let listener = tokio::net::TcpListener::bind(&listen_address).await?;
     let counter = TokenCounter::new("rpc_pubsub_connections");
-    let project_connections = Arc::new(DashMap::new());
     let project_rates = Arc::new(DashMap::new());
     loop {
         select! {
@@ -515,11 +503,10 @@ async fn listen(
                     let config = config.clone();
                     let tripwire = tripwire.clone();
                     let counter_token = counter.create_token();
-                    let project_connections = project_connections.clone();
                     let project_rates = project_rates.clone();
                     tokio::spawn(async move {
                         let handle = handle_connection(
-                            socket, subscription_control, config, tripwire, project_connections, project_rates
+                            socket, subscription_control, config, tripwire, project_rates
                         );
                         match handle.await {
                             Ok(()) => debug!("connection closed ({:?})", addr),
