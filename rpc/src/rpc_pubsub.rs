@@ -456,22 +456,23 @@ impl RpcSolPubSubImpl {
             })?;
         let id = token.id();
         self.current_subscriptions.insert(id, token);
-        let num_connections = self
+        let connection_count = self
             .project_connections
             .entry(self.project_id.clone())
             .and_modify(|count| *count += 1)
             .or_insert(1);
-        datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => self.project_id, "plan" => self.plan, ("num_connections", *num_connections, i64));
+        datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => self.project_id, "plan" => self.plan, ("num_connections", *connection_count, i64));
         Ok(id)
     }
 
     fn unsubscribe(&self, id: SubscriptionId) -> Result<bool> {
         if self.current_subscriptions.remove(&id).is_some() {
-            let num_connections = self
+            let connection_count = self
                 .project_connections
                 .entry(self.project_id.clone())
-                .and_modify(|count| *count -= 1);
-            datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => self.project_id, "plan" => self.plan, ("num_connections", *num_connections, i64));
+                .and_modify(|count| *count = count.saturating_sub(1))
+                .or_insert(0);
+            datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => self.project_id, "plan" => self.plan, ("num_connections", *connection_count, i64));
             Ok(true)
         } else {
             Err(Error {
