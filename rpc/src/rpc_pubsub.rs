@@ -387,30 +387,30 @@ impl RpcSolPubSubImpl {
     fn subscribe(&self, params: SubscriptionParams) -> Result<SubscriptionId> {
         let raydium_program_id =
             solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
-        let mut err = None;
-        if self.plan.contains("free") {
-            err = match params.clone() {
-                SubscriptionParams::Program(params) => {
-                    if params.pubkey == solana_sdk::system_program::id() {
-                        Some(Error {
-                            code: ErrorCode::InternalError,
-                            message: "Cannot subscribe to system program, please contact support"
-                                .into(),
-                            data: None,
-                        })
-                    } else if params.pubkey
-                        == solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")
-                    {
-                        Some(Error {
-                            code: ErrorCode::InternalError,
-                            message: "Cannot subscribe to raydium, please contact support".into(),
-                            data: None,
-                        })
-                    } else {
-                        None
-                    }
+        let err = match params.clone() {
+            SubscriptionParams::Program(params) => {
+                if params.pubkey == solana_sdk::system_program::id() {
+                    Some(Error {
+                        code: ErrorCode::InternalError,
+                        message: "Cannot subscribe to system program, please contact support"
+                            .into(),
+                        data: None,
+                    })
+                } else if params.pubkey
+                    == solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")
+                    && self.plan.contains("free")
+                {
+                    Some(Error {
+                        code: ErrorCode::InternalError,
+                        message: "Cannot subscribe to raydium, please upgrade your plan".into(),
+                        data: None,
+                    })
+                } else {
+                    None
                 }
-                SubscriptionParams::Logs(params) => {
+            }
+            SubscriptionParams::Logs(params) => {
+                if self.plan.contains("free") {
                     if params.kind == LogsSubscriptionKind::Single(raydium_program_id) {
                         Some(Error {
                             code: ErrorCode::InternalError,
@@ -428,10 +428,12 @@ impl RpcSolPubSubImpl {
                     } else {
                         None
                     }
+                } else {
+                    None
                 }
-                _ => None,
-            };
-        }
+            }
+            _ => None,
+        };
         if err.is_some() {
             datapoint_error!("rpc-pubsub-blocked", "project_id" => self.project_id, "api_key" => self.api_key, "plan" => self.plan, ("count", 1, i64));
             return Err(err.unwrap());
