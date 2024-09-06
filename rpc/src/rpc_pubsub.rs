@@ -360,6 +360,9 @@ pub struct RpcSolPubSubImpl {
     config: PubSubConfig,
     subscription_control: SubscriptionControl,
     current_subscriptions: Arc<DashMap<SubscriptionId, SubscriptionToken>>,
+    api_key: String,
+    project_id: String,
+    plan: String,
 }
 
 impl RpcSolPubSubImpl {
@@ -367,15 +370,73 @@ impl RpcSolPubSubImpl {
         config: PubSubConfig,
         subscription_control: SubscriptionControl,
         current_subscriptions: Arc<DashMap<SubscriptionId, SubscriptionToken>>,
+        api_key: String,
+        project_id: String,
+        plan: String,
     ) -> Self {
         Self {
             config,
             subscription_control,
             current_subscriptions,
+            api_key,
+            project_id,
+            plan,
         }
     }
 
     fn subscribe(&self, params: SubscriptionParams) -> Result<SubscriptionId> {
+        let raydium_program_id =
+            solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8");
+        let mut err = None;
+        if self.plan.contains("free") {
+            err = match params.clone() {
+                SubscriptionParams::Program(params) => {
+                    if params.pubkey == solana_sdk::system_program::id() {
+                        Some(Error {
+                            code: ErrorCode::InternalError,
+                            message: "Cannot subscribe to system program, please contact support"
+                                .into(),
+                            data: None,
+                        })
+                    } else if params.pubkey
+                        == solana_sdk::pubkey!("675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8")
+                    {
+                        Some(Error {
+                            code: ErrorCode::InternalError,
+                            message: "Cannot subscribe to raydium, please contact support".into(),
+                            data: None,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                SubscriptionParams::Logs(params) => {
+                    if params.kind == LogsSubscriptionKind::Single(raydium_program_id) {
+                        Some(Error {
+                            code: ErrorCode::InternalError,
+                            message: "Cannot subscribe to raydium logs, please contact support"
+                                .into(),
+                            data: None,
+                        })
+                    } else if params.kind == LogsSubscriptionKind::Single(spl_token::id()) {
+                        Some(Error {
+                            code: ErrorCode::InternalError,
+                            message: "Cannot subscribe to spl-token logs, please contact support"
+                                .into(),
+                            data: None,
+                        })
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+        }
+        if err.is_some() {
+            datapoint_error!("rpc-pubsub-blocked", "project_id" => self.project_id, "api_key" => self.api_key, "plan" => self.plan, ("count", 1, i64));
+            return Err(err.unwrap());
+        }
+
         let token = self
             .subscription_control
             .subscribe(params)

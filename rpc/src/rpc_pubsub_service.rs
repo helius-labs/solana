@@ -256,6 +256,8 @@ impl BroadcastHandler {
     fn handle(
         &self,
         api_key: &str,
+        project_id: &str,
+        plan: &str,
         notification: RpcNotification,
     ) -> Result<Option<Arc<String>>, Error> {
         if let Entry::Occupied(entry) = self
@@ -312,7 +314,7 @@ impl TestBroadcastReceiver {
                     );
                     if let Some(json) = self
                         .handler
-                        .handle("none", notification)
+                        .handle("none", "none", "none", notification)
                         .expect("handler failed")
                     {
                         return Ok(json.to_string());
@@ -345,6 +347,9 @@ pub fn test_connection(
         },
         subscriptions.control().clone(),
         Arc::clone(&current_subscriptions),
+        "none".to_string(),
+        "none".to_string(),
+        "none".to_string(),
     );
     let broadcast_handler = BroadcastHandler::new(current_subscriptions);
     let receiver = TestBroadcastReceiver {
@@ -374,14 +379,23 @@ async fn handle_connection(
 ) -> Result<(), Error> {
     let mut server = Server::new(socket.compat());
     let request = server.receive_request().await?;
-    let api_key = url::Url::parse(&format!("http://localhost{}", request.path()))
-        .ok()
-        .and_then(|u| {
-            let mut query_pairs = u.query_pairs();
-            let key = query_pairs.find(|(key, _)| key == "api-key");
-            key.map(|(_, value)| value.to_string())
-        })
-        .unwrap_or("none".to_string());
+    let (api_key, project_id, plan) =
+        url::Url::parse(&format!("http://localhost{}", request.path()))
+            .map(|u| {
+                let mut query_pairs = u.query_pairs();
+                let key = query_pairs.find(|(key, _)| key == "api-key");
+                let project_id = query_pairs.find(|(key, _)| key == "project-id");
+                let plan = query_pairs.find(|(key, _)| key == "plan");
+                (
+                    key.map(|(_, value)| value.to_string()),
+                    project_id.map(|(_, value)| value.to_string()),
+                    plan.map(|(_, value)| value.to_string()),
+                )
+            })
+            .unwrap_or((None, None, None));
+    let api_key = api_key.unwrap_or("none".to_string());
+    let project_id = project_id.unwrap_or("none".to_string());
+    let plan = plan.unwrap_or("none".to_string());
     let accept = server::Response::Accept {
         key: request.key(),
         protocol: None,
@@ -398,9 +412,13 @@ async fn handle_connection(
         config,
         subscription_control,
         Arc::clone(&current_subscriptions),
+        api_key.clone(),
+        project_id.clone(),
+        plan.clone(),
     );
     json_rpc_handler.extend_with(rpc_impl.to_delegate());
     let broadcast_handler = BroadcastHandler::new(current_subscriptions);
+
     loop {
         // Extra block for dropping `receive_future`.
         {
@@ -408,6 +426,7 @@ async fn handle_connection(
             // `receive_data` to completion.
             let receive_future = receiver.receive_data(&mut data);
             pin!(receive_future);
+
             loop {
                 select! {
                     result = &mut receive_future => match result {
@@ -417,7 +436,7 @@ async fn handle_connection(
                     },
                     result = broadcast_receiver.recv() => {
                         // In both possible error cases (closed or lagged) we disconnect the client.
-                        if let Some(json) = broadcast_handler.handle(api_key.as_str(), result?)? {
+                        if let Some(json) = broadcast_handler.handle(api_key.as_str(), project_id.as_str(), plan.as_str(), result?)? {
                             sender.send_text(&*json).await?;
                         }
                     },
