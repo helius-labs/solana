@@ -402,7 +402,8 @@ impl RpcSolPubSubImpl {
                 {
                     Some(Error {
                         code: ErrorCode::InternalError,
-                        message: "Cannot subscribe to raydium, please upgrade your plan".into(),
+                        message: "Cannot subscribe to raydium, please upgrade to a paid plan"
+                            .into(),
                         data: None,
                     })
                 } else {
@@ -414,15 +415,17 @@ impl RpcSolPubSubImpl {
                     if params.kind == LogsSubscriptionKind::Single(raydium_program_id) {
                         Some(Error {
                             code: ErrorCode::InternalError,
-                            message: "Cannot subscribe to raydium logs, please contact support"
-                                .into(),
+                            message:
+                                "Cannot subscribe to raydium logs, please upgrade to a paid plan"
+                                    .into(),
                             data: None,
                         })
                     } else if params.kind == LogsSubscriptionKind::Single(spl_token::id()) {
                         Some(Error {
                             code: ErrorCode::InternalError,
-                            message: "Cannot subscribe to spl-token logs, please contact support"
-                                .into(),
+                            message:
+                                "Cannot subscribe to spl-token logs, please upgrade to a paid plan"
+                                    .into(),
                             data: None,
                         })
                     } else {
