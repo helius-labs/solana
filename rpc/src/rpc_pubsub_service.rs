@@ -378,6 +378,7 @@ async fn handle_connection(
     config: PubSubConfig,
     mut tripwire: Tripwire,
     project_connections: Arc<DashMap<String, usize>>,
+    project_rates: Arc<DashMap<String, (std::time::Instant, u64)>>,
 ) -> Result<(), Error> {
     let mut server = Server::new(socket.compat());
     let request = server.receive_request().await?;
@@ -430,7 +431,6 @@ async fn handle_connection(
     );
     json_rpc_handler.extend_with(rpc_impl.to_delegate());
     let broadcast_handler = BroadcastHandler::new(current_subscriptions);
-
     loop {
         // Extra block for dropping `receive_future`.
         {
@@ -447,6 +447,27 @@ async fn handle_connection(
                         Err(err) => return Err(err.into()),
                     },
                     result = broadcast_receiver.recv() => {
+                        let mut limit = false;
+                        {
+                            project_rates.entry(project_id.clone()).and_modify(|e| {
+                                let max_rate = if plan.contains("free") { 2 } else { 1000 };
+                                if !plan.contains("enterprise") && e.1 >= 1000 {
+                                    limit = true;
+                                }
+                                if e.0.elapsed().as_secs() >= 1 {
+                                    e.0 = std::time::Instant::now();
+                                    e.1 = 0;
+                                }
+                                e.1 += 1;
+                            })
+                            .or_insert((std::time::Instant::now(), 1));
+                        }
+                        if limit {
+                            datapoint_info!("rpc_pubsub_websocket_rate_limit", "project_id" => project_id, "api_key" => api_key, "plan" => plan, ("count", 1, i64));
+                            return Err(Error::Handshake(soketto::handshake::Error::Http(
+                                "Websocket rate exceeded, upgrade plan or contact helius support".into(),
+                            )));
+                        }
                         // In both possible error cases (closed or lagged) we disconnect the client.
                         if let Some(json) = broadcast_handler.handle(api_key.as_str(), project_id.as_str(), plan.as_str(), result?)? {
                             sender.send_text(&*json).await?;
@@ -484,6 +505,7 @@ async fn listen(
     let listener = tokio::net::TcpListener::bind(&listen_address).await?;
     let counter = TokenCounter::new("rpc_pubsub_connections");
     let project_connections = Arc::new(DashMap::new());
+    let project_rates = Arc::new(DashMap::new());
     loop {
         select! {
             result = listener.accept() => match result {
@@ -494,9 +516,10 @@ async fn listen(
                     let tripwire = tripwire.clone();
                     let counter_token = counter.create_token();
                     let project_connections = project_connections.clone();
+                    let project_rates = project_rates.clone();
                     tokio::spawn(async move {
                         let handle = handle_connection(
-                            socket, subscription_control, config, tripwire, project_connections
+                            socket, subscription_control, config, tripwire, project_connections, project_rates
                         );
                         match handle.await {
                             Ok(()) => debug!("connection closed ({:?})", addr),
