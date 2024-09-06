@@ -440,7 +440,7 @@ async fn handle_connection(
                         {
                             project_rates.entry(project_id.clone()).and_modify(|e| {
                                 let max_rate = if plan.contains("free") { 25 } else { 1000 };
-                                if !plan.contains("enterprise") && e.1 >= max_rate {
+                                if !plan.contains("enterprise") && !plan.contains("none") && e.1 >= max_rate {
                                     limit = true;
                                 }
                                 if e.0.elapsed().as_secs() >= 1 {
