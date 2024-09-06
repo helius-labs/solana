@@ -402,6 +402,15 @@ async fn handle_connection(
         key: request.key(),
         protocol: None,
     };
+    if let Some(connections) = project_connections.get(&project_id) {
+        if plan.contains("free") {
+            if *connections >= 2 {
+                return Err(Error::Handshake(soketto::handshake::Error::Http(
+                    "Too many connections".into(),
+                )));
+            }
+        }
+    }
     server.send_response(&accept).await?;
     let (mut sender, mut receiver) = server.into_builder().finish();
 
