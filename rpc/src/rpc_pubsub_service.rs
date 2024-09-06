@@ -418,7 +418,7 @@ async fn handle_connection(
         plan.clone(),
     );
     json_rpc_handler.extend_with(rpc_impl.to_delegate());
-    let broadcast_handler = BroadcastHandler::new(current_subscriptions);
+    let broadcast_handler = BroadcastHandler::new(current_subscriptions.clone());
     loop {
         // Extra block for dropping `receive_future`.
         {
