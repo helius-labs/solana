@@ -178,6 +178,7 @@ impl Default for JsonRpcConfig {
             rpc_scan_and_fix_roots: Default::default(),
             max_request_body_size: Option::default(),
             disable_health_check: Default::default(),
+            skip_preflight_health_check: Default::default(),
         }
     }
 }
