@@ -379,22 +379,23 @@ async fn handle_connection(
 ) -> Result<(), Error> {
     let mut server = Server::new(socket.compat());
     let request = server.receive_request().await?;
-    let query_params = url::Url::parse(&format!("http://localhost{}", request.path()))
-        .map(|u| {
-            let mut query_pairs = u.query_pairs();
-            let key = query_pairs.find(|(key, _)| key == "api-key");
-            let project_id = query_pairs.find(|(key, _)| key == "project-id");
-            let plan = query_pairs.find(|(key, _)| key == "plan");
-            (
-                key.map(|(_, value)| value.to_string()),
-                project_id.map(|(_, value)| value.to_string()),
-                plan.map(|(_, value)| value.to_string()),
-            )
-        })
-        .unwrap_or((None, None, None));
-    let api_key = query_params.0.unwrap_or("none".to_string());
-    let project_id = query_params.1.unwrap_or("none".to_string());
-    let plan = query_params.2.unwrap_or("none".to_string());
+    let (api_key, project_id, plan) =
+        url::Url::parse(&format!("http://localhost{}", request.path()))
+            .map(|u| {
+                let query_pairs: Vec<_> = u.query_pairs().collect();
+                let api_key = query_pairs.iter().find(|(key, _)| key == "api-key");
+                let project_id = query_pairs.iter().find(|(key, _)| key == "project-id");
+                let plan = query_pairs.iter().find(|(key, _)| key == "plan");
+                (
+                    api_key.map(|(_, value)| value.to_string()),
+                    project_id.map(|(_, value)| value.to_string()),
+                    plan.map(|(_, value)| value.to_string()),
+                )
+            })
+            .unwrap_or((None, None, None));
+    let api_key = api_key.unwrap_or("none".to_string());
+    let project_id = project_id.unwrap_or("none".to_string());
+    let plan = plan.unwrap_or("none".to_string());
     let accept = server::Response::Accept {
         key: request.key(),
         protocol: None,
