@@ -467,14 +467,10 @@ impl RpcSolPubSubImpl {
 
     fn unsubscribe(&self, id: SubscriptionId) -> Result<bool> {
         if self.current_subscriptions.remove(&id).is_some() {
-            self.project_connections
-                .entry(self.project_id.clone())
-                .and_modify(|count| *count -= 1);
             let num_connections = self
                 .project_connections
                 .entry(self.project_id.clone())
-                .and_modify(|count| *count += 1)
-                .or_insert(1);
+                .and_modify(|count| *count -= 1);
             datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => self.project_id, "plan" => self.plan, ("num_connections", *num_connections, i64));
             Ok(true)
         } else {
