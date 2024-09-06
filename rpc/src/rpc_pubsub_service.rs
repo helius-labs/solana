@@ -347,6 +347,7 @@ pub fn test_connection(
         },
         subscriptions.control().clone(),
         Arc::clone(&current_subscriptions),
+        Arc::new(DashMap::new()),
         "none".to_string(),
         "none".to_string(),
         "none".to_string(),
@@ -483,6 +484,7 @@ async fn listen(
                     let config = config.clone();
                     let tripwire = tripwire.clone();
                     let counter_token = counter.create_token();
+                    let project_connections = project_connections.clone();
                     tokio::spawn(async move {
                         let handle = handle_connection(
                             socket, subscription_control, config, tripwire, project_connections
