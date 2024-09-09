@@ -453,9 +453,9 @@ async fn handle_connection(
                         }
                         if limit {
                             datapoint_info!("rpc_pubsub_websocket_rate_limit", "project_id" => project_id, "api_key" => api_key, "plan" => plan, ("count", 1, i64));
-                            return Err(Error::Handshake(soketto::handshake::Error::Http(
-                                "Websocket rate exceeded, upgrade plan or contact helius support".into(),
-                            )));
+                            // return Err(Error::Handshake(soketto::handshake::Error::Http(
+                            //     "Websocket rate exceeded, upgrade plan or contact helius support".into(),
+                            // )));
                         }
                         // In both possible error cases (closed or lagged) we disconnect the client.
                         if let Some(json) = broadcast_handler.handle(api_key.as_str(), project_id.as_str(), plan.as_str(), result?)? {
