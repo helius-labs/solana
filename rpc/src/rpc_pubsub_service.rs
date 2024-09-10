@@ -273,7 +273,7 @@ impl BroadcastHandler {
             if notification.is_final {
                 entry.remove();
             }
-            datapoint_info!("rpc_pubsub_notification_with_identifier", "identifier" => notification.identifier, "api_key" => api_key, "project_id" => project_id, "plan" => plan, ("count", 1, i64));
+            // datapoint_info!("rpc_pubsub_notification_with_identifier", "identifier" => notification.identifier, "api_key" => api_key, "project_id" => project_id, "plan" => plan, ("count", 1, i64));
             notification
                 .json
                 .upgrade()
@@ -435,7 +435,7 @@ async fn handle_connection(
                         Err(err) => return Err(err.into()),
                     },
                     result = broadcast_receiver.recv() => {
-                        datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => project_id, "api_key" => api_key, "plan" => plan, ("count", current_subscriptions.len() as i64, i64));
+                        // datapoint_info!("rpc-pubsub-connections-by-project", "project_id" => project_id, "api_key" => api_key, "plan" => plan, ("count", current_subscriptions.len() as i64, i64));
                         let mut limit = false;
                         {
                             project_rates.entry(project_id.clone()).and_modify(|e| {
@@ -452,7 +452,7 @@ async fn handle_connection(
                             .or_insert((std::time::Instant::now(), 1));
                         }
                         if limit {
-                            datapoint_info!("rpc_pubsub_websocket_rate_limit", "project_id" => project_id, "api_key" => api_key, "plan" => plan, ("count", 1, i64));
+                            // datapoint_info!("rpc_pubsub_websocket_rate_limit", "project_id" => project_id, "api_key" => api_key, "plan" => plan, ("count", 1, i64));
                             // return Err(Error::Handshake(soketto::handshake::Error::Http(
                             //     "Websocket rate exceeded, upgrade plan or contact helius support".into(),
                             // )));

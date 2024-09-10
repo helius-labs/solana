@@ -503,7 +503,7 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
             data_slice,
             encoding: encoding.unwrap_or(UiAccountEncoding::Binary),
         };
-        datapoint_info!("rpc-pubsub-account-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
+        // datapoint_info!("rpc-pubsub-account-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
         self.subscribe(SubscriptionParams::Account(params))
     }
 
@@ -528,7 +528,7 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
             commitment: config.account_config.commitment.unwrap_or_default(),
             with_context: config.with_context.unwrap_or_default(),
         };
-        datapoint_info!("rpc-pubsub-program-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
+        // datapoint_info!("rpc-pubsub-program-subscribe", "pubkey" => pubkey_str, ("count", 1, i64));
         self.subscribe(SubscriptionParams::Program(params))
     }
 
@@ -560,7 +560,7 @@ impl RpcSolPubSubInternal for RpcSolPubSubImpl {
             kind,
             commitment: config.and_then(|c| c.commitment).unwrap_or_default(),
         };
-        datapoint_info!("rpc-pubsub-logs-subscribe", "kind" => kind_string, ("count", 1, i64));
+        // datapoint_info!("rpc-pubsub-logs-subscribe", "kind" => kind_string, ("count", 1, i64));
         self.subscribe(SubscriptionParams::Logs(params))
     }
 
